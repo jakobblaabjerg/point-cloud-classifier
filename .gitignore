@@ -1,0 +1,6 @@
+# Ignore Python environment files
+.envs/
+*.env
+
+# Ignore data folder
+data/
