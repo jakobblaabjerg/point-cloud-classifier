@@ -4,3 +4,7 @@
 
 # Ignore data folder
 data/
+
+log/
+results/
+search_runs/

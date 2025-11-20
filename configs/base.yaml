@@ -1,0 +1,9 @@
+meta:
+  model_name: ""
+  dataset_name: ""
+
+dataset:
+  data_dir: "data/continuous"
+
+logging:
+  log_dir: "log"

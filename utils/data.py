@@ -3,9 +3,12 @@ import os
 import numpy as np
 import h5py
 import pandas as pd
+import torch
+import joblib
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, TensorDataset
 
 class DataModule():
 
@@ -13,7 +16,9 @@ class DataModule():
                  data_dir,
                  particles = ["proton", "piM"],
                  create_dataset = False,
-                 feature_scaling = True
+                 feature_scaling = True,
+                 convert_to_tensor = False,
+                 batch_size = None,
                  ):
         
         self.particles = particles
@@ -21,7 +26,8 @@ class DataModule():
         self.create_dataset = create_dataset
         self.data_split = (0.6, 0.2, 0.2) # (train, val, test)
         self.feature_scaling = feature_scaling
-
+        self.convert_to_tensor = convert_to_tensor
+        self.batch_size = batch_size
         self.datasets = {"train": [],
             "val": [],
             "test": []
@@ -169,8 +175,7 @@ class Step2PointTabular(DataModule):
         for split in self.datasets:
             filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
             if not os.path.exists(filepath):
-                print(f"File not found: {filepath}")
-                continue
+                raise FileNotFoundError(f"Required file is missing: {filepath}")
 
             print(f"Loading {split} dataset from {filepath}")
             data = np.load(filepath)
@@ -186,6 +191,33 @@ class Step2PointTabular(DataModule):
 
         print("Finished loading datasets")
 
+    def _convert_to_tensor(self, dataset, split):
+        X = dataset.drop(columns=["label"]).to_numpy()
+        y = np.array(dataset["label"])
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y.reshape(-1, 1), dtype=torch.float32)
+        return DataLoader(TensorDataset(X_tensor, y_tensor), batch_size=self.batch_size, shuffle=(split=="train"))
+
+    def get_train_data(self):
+        split ="train"
+        if self.convert_to_tensor:
+            return self._convert_to_tensor(self.datasets[split], split)
+        else:
+            return self.datasets[split]
+
+    def get_val_data(self):
+        split="val"
+        if self.convert_to_tensor:
+            return self._convert_to_tensor(self.datasets[split], split)
+        else:
+            return self.datasets[split]
+
+    def get_test_data(self):
+        split="test"
+        if self.convert_to_tensor:
+            return self._convert_to_tensor(self.datasets[split], split)
+        else:
+            return self.datasets[split]
 
     def _create_dataset(self):
 
@@ -198,7 +230,7 @@ class Step2PointTabular(DataModule):
             files = self._find_files(particle)
         
             for f in files:
-                print(f)
+                print(os.path.basename(f))
                 data_raw = self._load_h5py_file(f)
                 data_preprocessed  = self._preprocess_data(data_raw, particle)
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
@@ -216,6 +248,7 @@ class Step2PointTabular(DataModule):
         self._save_datasets()
         
 
+
     def _scale_features(self):
 
         feature_cols = [col for col in self.datasets["train"].columns if col != "label"]
@@ -230,6 +263,7 @@ class Step2PointTabular(DataModule):
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         self.scaler = scaler
+        joblib.dump(scaler, os.path.join(self.data_dir, f"{self.name}_scaler.pkl"))        
 
         # transform val and test
         X_val_scaled = scaler.transform(X_val)
@@ -251,8 +285,8 @@ class Step2PointTabular(DataModule):
 
             subdetector_meta = metadata_group["subdetector_names"][:]
             subdetector = steps_group["subdetector"][:]
-            subdetector_decoded = np.array([subdetector_meta[i] for i in subdetector])
-            
+            subdetector_decoded = subdetector_meta[subdetector]
+
             data = {
                 "energy": steps_group["energy"][:],
                 "event_id": steps_group["event_id"][:],
@@ -261,7 +295,6 @@ class Step2PointTabular(DataModule):
             }
 
         return data
-
 
 
 class Step2PointPointCloud(DataModule):
@@ -275,9 +308,7 @@ class Step2PointGraph(DataModule):
         pass
 
 
+if __name__ == "__main__":
 
-
-
-
-    
-
+    data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
+    Step2PointTabular(data_dir=data_dir, create_dataset=True)
