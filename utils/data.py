@@ -71,6 +71,8 @@ class DataModule():
         "test": []
         }
 
+        global_event_id = 0
+
         for particle in self.particles:
             files = self._find_files(particle)
         
@@ -79,6 +81,9 @@ class DataModule():
                 data_raw = self._load_h5py_file(f)
                 data_preprocessed  = self._preprocess_data(data_raw, particle)
                 data_preprocessed["source_file"] = os.path.basename(f)
+                num_events = data_preprocessed["event_id"].nunique()
+                data_preprocessed["event_id"] = data_preprocessed["event_id"]+global_event_id
+                global_event_id += num_events
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
                 self.datasets["train"].append(train_df)
                 self.datasets["val"].append(val_df)
@@ -407,24 +412,24 @@ class Step2PointPointCloud(DataModule):
             source_files = data["source_file"].unique()
             print(f"Saving {split} dataset")
             
-            for f in source_files:
-                
-                basename = os.path.basename(f)
-                part_str = basename.split("_")[-1]
-                part = int(part_str.replace("file", "").replace(".h5", ""))
+            parts = [int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) for f in source_files]
+            unique_parts = set(parts)
 
-                data_filtered = data.copy()
-                data_filtered = data_filtered[data_filtered["source_file"]==f]
+            for part in unique_parts:
+
+                files_for_part = [f for f in source_files if int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) == part]
+                df_part = data.copy()                
+                df_part = df_part[df_part["source_file"].isin(files_for_part)]
                 filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.npz")
                 np.savez(
                     filepath,
-                    event_id = data_filtered["event_id"].to_numpy(),
-                    energy = data_filtered["energy"].to_numpy(),
-                    position_x = data_filtered["position_x"].to_numpy(),
-                    position_y = data_filtered["position_y"].to_numpy(),
-                    position_z = data_filtered["position_z"].to_numpy(), 
-                    time = data_filtered["time"].to_numpy(),
-                    label = data_filtered["label"].to_numpy(),
+                    event_id = df_part["event_id"].to_numpy(),
+                    energy = df_part["energy"].to_numpy(),
+                    position_x = df_part["position_x"].to_numpy(),
+                    position_y = df_part["position_y"].to_numpy(),
+                    position_z = df_part["position_z"].to_numpy(), 
+                    time = df_part["time"].to_numpy(),
+                    label = df_part["label"].to_numpy(),
                 )
             print("Finished saving data")
 
