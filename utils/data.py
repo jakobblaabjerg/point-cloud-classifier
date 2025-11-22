@@ -17,7 +17,6 @@ class DataModule():
                  particles = ["proton", "piM"],
                  create_dataset = False,
                  feature_scaling = True,
-                 convert_to_tensor = False,
                  batch_size = None,
                  ):
         
@@ -26,7 +25,6 @@ class DataModule():
         self.create_dataset = create_dataset
         self.data_split = (0.6, 0.2, 0.2) # (train, val, test)
         self.feature_scaling = feature_scaling
-        self.convert_to_tensor = convert_to_tensor
         self.batch_size = batch_size
         self.datasets = {"train": [],
             "val": [],
@@ -45,16 +43,111 @@ class DataModule():
 
 
     def _load_h5py_file(self, filepath):
-        """Load and return the contents of a single HDF5 file."""
-        raise NotImplementedError("Implement HDF5 file loading logic here.")
+       
+        with h5py.File(filepath, "r") as f:
 
+            metadata_group = f["metadata"]
+            steps_group = f["steps"]
+
+            subdetector_meta = metadata_group["subdetector_names"][:]
+            subdetector = steps_group["subdetector"][:]
+            subdetector_decoded = subdetector_meta[subdetector]
+
+            data = {
+                "energy": steps_group["energy"][:],
+                "event_id": steps_group["event_id"][:],
+                "position": steps_group["position"][:],
+                "time": steps_group["time"][:],
+                "subdetector": subdetector_decoded,
+            }
+
+        return data
+
+    def _create_dataset(self):
+
+        self.datasets = {"train": [],
+        "val": [],
+        "test": []
+        }
+
+        for particle in self.particles:
+            files = self._find_files(particle)
+        
+            for f in files:
+                print(os.path.basename(f))
+                data_raw = self._load_h5py_file(f)
+                data_preprocessed  = self._preprocess_data(data_raw, particle)
+                train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
+                self.datasets["train"].append(train_df)
+                self.datasets["val"].append(val_df)
+                self.datasets["test"].append(test_df)
+
+        # concatenate each split
+        for split in self.datasets:
+            self.datasets[split] = pd.concat(self.datasets[split], ignore_index=True)
+
+        if self.feature_scaling:
+            self._scale_features()
+        
+        self._save_datasets()
+
+
+    def _split_dataset(self, dataset):
+
+        train_frac, val_frac, test_frac = self.data_split
+
+        train_df, test_df = train_test_split(
+            dataset, 
+            test_size=test_frac, 
+            stratify=dataset["label"], 
+            random_state=42
+        )
+
+        train_df, val_df = train_test_split(
+            train_df,
+            test_size=val_frac/(train_frac+val_frac),
+            stratify=train_df["label"],
+            random_state=42
+        )
+
+        return train_df, val_df, test_df
+
+    def _scale_features(self):
+
+        feature_cols = [col for col in self.datasets["train"].columns if col not in ["label", "event_id"]]
+        print("Scaling the following columns:", feature_cols)
+
+        # extract features
+        X_train = self.datasets["train"][feature_cols]
+        X_val   = self.datasets["val"][feature_cols]
+        X_test  = self.datasets["test"][feature_cols]
+
+        # fit scaler on train
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        self.scaler = scaler
+        joblib.dump(scaler, os.path.join(self.data_dir, f"{self.name}_scaler.pkl"))        
+
+        # transform val and test
+        X_val_scaled = scaler.transform(X_val)
+        X_test_scaled = scaler.transform(X_test)
+
+        # replace original feature columns with scaled values
+        for split, X_scaled in zip(["train", "val", "test"], [X_train_scaled, X_val_scaled, X_test_scaled]):
+            df_scaled = self.datasets[split].copy()
+            df_scaled[feature_cols] = X_scaled
+            self.datasets[split] = df_scaled
 
 
 class Step2PointTabular(DataModule):
 
-    def __init__(self, data_dir, **kwargs):
+    def __init__(self, 
+                 data_dir,
+                 convert_to_tensor = False, 
+                 **kwargs):
         super().__init__(data_dir=data_dir, **kwargs)        
         self.name = "S2PT"
+        self.convert_to_tensor = convert_to_tensor
 
         if self.create_dataset:
             print("Creating Step2PointTabular (S2PT) dataset")
@@ -68,9 +161,6 @@ class Step2PointTabular(DataModule):
         df = pd.DataFrame({
             "event_id": data["event_id"],
             "energy": data["energy"],
-            "x": data["position"][:, 0],
-            "y": data["position"][:, 1],
-            "z": data["position"][:, 2],
             "subdetector": data["subdetector"]
         })
 
@@ -135,25 +225,6 @@ class Step2PointTabular(DataModule):
         return df_preprocessed
 
 
-    def _split_dataset(self, dataset):
-
-        train_frac, val_frac, test_frac = self.data_split
-
-        train_df, test_df = train_test_split(
-            dataset, 
-            test_size=test_frac, 
-            stratify=dataset["label"], 
-            random_state=42
-        )
-
-        train_df, val_df = train_test_split(
-            train_df,
-            test_size=val_frac/(train_frac+val_frac),
-            stratify=train_df["label"],
-            random_state=42
-        )
-
-        return train_df, val_df, test_df
 
     def _save_datasets(self):
 
@@ -198,6 +269,7 @@ class Step2PointTabular(DataModule):
         y_tensor = torch.tensor(y.reshape(-1, 1), dtype=torch.float32)
         return DataLoader(TensorDataset(X_tensor, y_tensor), batch_size=self.batch_size, shuffle=(split=="train"))
 
+
     def get_train_data(self):
         split ="train"
         if self.convert_to_tensor:
@@ -219,88 +291,192 @@ class Step2PointTabular(DataModule):
         else:
             return self.datasets[split]
 
-    def _create_dataset(self):
-
-        self.datasets = {"train": [],
-        "val": [],
-        "test": []
-        }
-
-        for particle in self.particles:
-            files = self._find_files(particle)
-        
-            for f in files:
-                print(os.path.basename(f))
-                data_raw = self._load_h5py_file(f)
-                data_preprocessed  = self._preprocess_data(data_raw, particle)
-                train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
-                self.datasets["train"].append(train_df)
-                self.datasets["val"].append(val_df)
-                self.datasets["test"].append(test_df)
-
-        # concatenate each split
-        for split in self.datasets:
-            self.datasets[split] = pd.concat(self.datasets[split], ignore_index=True)
-
-        if self.feature_scaling:
-            self._scale_features()
-        
-        self._save_datasets()
-        
 
 
-    def _scale_features(self):
 
-        feature_cols = [col for col in self.datasets["train"].columns if col != "label"]
-        print("Scaling the following columns:", feature_cols)
-
-        # extract features
-        X_train = self.datasets["train"][feature_cols]
-        X_val   = self.datasets["val"][feature_cols]
-        X_test  = self.datasets["test"][feature_cols]
-
-        # fit scaler on train
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        self.scaler = scaler
-        joblib.dump(scaler, os.path.join(self.data_dir, f"{self.name}_scaler.pkl"))        
-
-        # transform val and test
-        X_val_scaled = scaler.transform(X_val)
-        X_test_scaled = scaler.transform(X_test)
-
-        # replace original feature columns with scaled values
-        for split, X_scaled in zip(["train", "val", "test"], [X_train_scaled, X_val_scaled, X_test_scaled]):
-            df_scaled = self.datasets[split].copy()
-            df_scaled[feature_cols] = X_scaled
-            self.datasets[split] = df_scaled
-
-
-    def _load_h5py_file(self, filepath):
-       
-        with h5py.File(filepath, "r") as f:
-
-            metadata_group = f["metadata"]
-            steps_group = f["steps"]
-
-            subdetector_meta = metadata_group["subdetector_names"][:]
-            subdetector = steps_group["subdetector"][:]
-            subdetector_decoded = subdetector_meta[subdetector]
-
-            data = {
-                "energy": steps_group["energy"][:],
-                "event_id": steps_group["event_id"][:],
-                "position": steps_group["position"][:],
-                "subdetector": subdetector_decoded,
-            }
-
-        return data
 
 
 class Step2PointPointCloud(DataModule):
 
-    def __init__(self):
-        pass
+    def __init__(self, 
+                 data_dir,
+                 sparse_batching=True,
+                 **kwargs):
+        super().__init__(data_dir=data_dir, **kwargs)        
+        self.name = "S2PPC"
+
+
+        if sparse_batching:
+            self.collate_fn = self._collate_sparse
+        else:
+            self.collate_fn = self._collate_padded
+
+
+        if self.create_dataset:
+            print("Creating Step2PointPointCloud (S2PPC) dataset")
+            self._create_dataset()
+        else:
+            self._load_dataset()
+
+
+    def _wrap_dataset(self, split):
+        
+        # wrap pandas dataframe into pytorch dataset
+        df = self.datasets[split]
+        
+        class _DatasetWrapper(torch.utils.data.Dataset):
+            
+            def __init__(self, df):
+                self.df = df
+                self.event_ids = df["event_id"].unique()
+                self.grouped = df.groupby("event_id")
+                self.feature_cols = [col for col in self.df.columns if col not in ["label", "event_id"]]
+
+            def __len__(self):
+                return len(self.event_ids)
+            
+            def __getitem__(self, idx):
+
+                event_id = self.event_ids[idx]
+                event_data = self.grouped.get_group(event_id)                
+                features = torch.tensor(event_data[self.feature_cols].values, dtype=torch.float32)
+                label  = torch.tensor(event_data["label"].iloc[0], dtype=torch.float32).unsqueeze(0)
+                return features, label
+       
+        return _DatasetWrapper(df)
+
+    def get_train_loader(self):
+        return DataLoader(
+            self._wrap_dataset("train"), 
+            batch_size=self.batch_size,
+            shuffle=True,
+            collate_fn=self.collate_fn
+        )
+
+    def get_val_loader(self):
+        return DataLoader(
+            self._wrap_dataset("val"), 
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self.collate_fn
+        )
+
+    def get_test_loader(self):
+        return DataLoader(
+            self._wrap_dataset("test"), 
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self.collate_fn
+        )
+
+    def _preprocess_data(self, data, particle):
+        
+        df = pd.DataFrame({
+            "event_id": data["event_id"],
+            "energy": data["energy"],
+            "position_x": data["position"][:, 0],
+            "position_y": data["position"][:, 1],
+            "position_z": data["position"][:, 2],
+            "time": data["time"]
+        })
+
+        df["label"] = particle
+        df["label"] = df["label"].map({"proton": 0, "piM": 1})
+
+        if df.isna().any().any():
+            print("There are NaN values in the dataset!")
+        else:
+            print("No NaN values detected.")
+        
+        return df
+
+
+    def _save_datasets(self):
+
+        for split in self.datasets:
+            data = self.datasets[split]
+            print(f"Saving {split} dataset")
+            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
+            np.savez(
+                filepath,
+                event_id = data["event_id"].to_numpy(),
+                energy = data["energy"].to_numpy(),
+                position_x = data["position_x"].to_numpy(),
+                position_y = data["position_y"].to_numpy(),
+                position_z = data["position_z"].to_numpy(), 
+                time = data["time"].to_numpy(),
+                label = data["label"].to_numpy(),
+            )
+        print("Finished saving data")
+
+    def _load_dataset(self):
+        for split in self.datasets:
+            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(f"Required file is missing: {filepath}")
+
+            print(f"Loading {split} dataset from {filepath}")
+            data = np.load(filepath)
+            df = pd.DataFrame({
+                "event_id": data["event_id"],
+                "energy": data["energy"],
+                "position_x": data["position_x"],
+                "position_y": data["position_y"],
+                "position_z": data["position_z"],
+                "time": data["time"],
+                "label": data["label"]
+            })
+
+            self.datasets[split] = df
+
+        print("Finished loading datasets")
+
+
+
+    def _collate_sparse(self, batch):
+        """
+        features:       (sum(N_hits_i), F)
+        lengths:        (B,)
+        labels:         (B,1)
+        """
+        features_list, labels = zip(*batch)
+        features = torch.cat(features_list, dim=0)
+        lengths = torch.tensor([f.size(0) for f in features_list]).long()
+        labels = torch.stack(labels).float()
+
+        return features, lengths, labels
+
+
+    def _collate_padded(self, batch):
+        """
+        features:  (B, N_max, F)
+        mask:   (B, N_max)
+        labels: (B,1)
+        """
+        features_list, labels_list = zip(*batch)
+        B = len(batch)
+        lengths = [f.size(0) for f in features_list]
+        N_max = max(lengths)
+
+        F = features_list[0].size(1)
+
+        features = torch.zeros((B, N_max, F))
+        mask  = torch.zeros((B, N_max))
+
+        for i, f in enumerate(features_list):
+            
+            n = f.size(0)
+            features[i, :n] = f
+            mask[i, :n] = 1.0
+
+        labels = torch.stack(labels_list).float()
+
+        return features, mask, labels
+
+
+
+
+
 
 class Step2PointGraph(DataModule):
     
@@ -311,4 +487,4 @@ class Step2PointGraph(DataModule):
 if __name__ == "__main__":
 
     data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
-    Step2PointTabular(data_dir=data_dir, create_dataset=True)
+    Step2PointPointCloud(data_dir=data_dir, create_dataset=True)

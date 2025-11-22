@@ -4,6 +4,8 @@ from utils.config import load_config, save_config
 from utils.plots import plot_confusion_matrix, plot_precision_recall_curve, plot_roc_curve
 from models.logistic_regression import LogRegression
 from models.fully_connected_net import FullyConnectedNet
+from models.wrapper import ModelWrapper
+from models.deep_sets import DeepSets
 import numpy as np 
 import os
 import pickle
@@ -40,13 +42,14 @@ def get_model(model_name, config, model_dir=None):
            
     elif model_name == "fully_connected_net":
 
-        model = FullyConnectedNet(**config["model"], **config["logging"]) 
-        
+        model = FullyConnectedNet(**config["model"]) 
+        model = ModelWrapper(model, **config["trainer"], **config["logging"])
+
         if model_dir is not None:
             model_path = os.path.join(model_dir, "model.pt")
             if not os.path.exists(model_path):
                 raise FileNotFoundError(f"FullyConnectedNet model not found at {model_path}")
-            model.load_state_dict(torch.load(model_path, map_location=model.device))
+            model.load()
             print(f"Loaded FullyConnectedNet model from {model_path}")             
     
     else:
@@ -79,7 +82,7 @@ def evaluate_model(model_dir, save_dir):
 
 
 
-def train_model(model_name: str, dataset_name: str, config, plots=False):
+def train_model(model_name: str, dataset_name: str, config, plots=False, return_log_dir=False):
 
     dataset_name = dataset_name.lower()
     model_name = model_name.lower()
@@ -112,6 +115,7 @@ def train_model(model_name: str, dataset_name: str, config, plots=False):
     acc_val = accuracy_score(y_true_val, y_pred_val)
     logger.log_metric("accuracy/train", round(acc_train, 6))
     logger.log_metric("accuracy/val", round(acc_val, 6))
+    logger.log_metric("parameters", model.get_trainable_parameters())
 
     if plots:
         y_true_val, y_prob_val = model.predict(val_loader, return_prob=True)
@@ -119,18 +123,21 @@ def train_model(model_name: str, dataset_name: str, config, plots=False):
         plot_precision_recall_curve(y_true_val, y_prob_val, log_dir)
         plot_roc_curve(y_true_val, y_prob_val, log_dir)
 
+    if return_log_dir:
+        return log_dir
+    return None
 
 if __name__ == "__main__": 
 
-    # model = "fully_connected_net"
-    # #model = "logistic_regression"
-    # dataset = "s2pt" 
-    # config = load_config("configs/base.yaml", f"configs/{model}.yaml")
-    # train_model(model, dataset, config, plots=True)
+    model = "fully_connected_net"
+#    model = "logistic_regression"
+    dataset = "s2pt" 
+    config = load_config("configs/base.yaml", f"configs/{model}.yaml")
+    train_model(model, dataset, config, plots=True)
 
 
-    version = 31
-    model_dir = f"log/version_{version}"
-    save_dir = f"results/version_{version}"
-    os.makedirs(save_dir, exist_ok=True)
-    evaluate_model(model_dir=model_dir, save_dir=save_dir)
+    # version = 31
+    # model_dir = f"log/version_{version}"
+    # save_dir = f"results/version_{version}"
+    # os.makedirs(save_dir, exist_ok=True)
+    # evaluate_model(model_dir=model_dir, save_dir=save_dir)

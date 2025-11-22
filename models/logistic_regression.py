@@ -32,5 +32,16 @@ class LogRegression():
             return y_true, y_pred        
 
 
+    def get_trainable_parameters(self):
+        if not hasattr(self.clf, "coef_"):
+            raise ValueError("Model has not been fitted yet. Fit the model before counting parameters.")
+
+        n_params = self.clf.coef_.size
+        
+        if hasattr(self.clf, "intercept_"):
+            n_params += self.clf.intercept_.size
+
+        return n_params
+
 
 
