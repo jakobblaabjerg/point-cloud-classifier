@@ -5,6 +5,7 @@ import h5py
 import pandas as pd
 import torch
 import joblib
+import glob
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -77,6 +78,7 @@ class DataModule():
                 print(os.path.basename(f))
                 data_raw = self._load_h5py_file(f)
                 data_preprocessed  = self._preprocess_data(data_raw, particle)
+                data_preprocessed["source_file"] = os.path.basename(f)
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
                 self.datasets["train"].append(train_df)
                 self.datasets["val"].append(val_df)
@@ -90,6 +92,11 @@ class DataModule():
             self._scale_features()
         
         self._save_datasets()
+        
+        # remove source file column after data is saved
+        for split in self.datasets:
+            self.datasets[split] = self.datasets[split].drop(columns=["source_file"])
+
 
 
     def _split_dataset(self, dataset):
@@ -114,7 +121,7 @@ class DataModule():
 
     def _scale_features(self):
 
-        feature_cols = [col for col in self.datasets["train"].columns if col not in ["label", "event_id"]]
+        feature_cols = [col for col in self.datasets["train"].columns if col not in ["label", "event_id", "source_file"]]
         print("Scaling the following columns:", feature_cols)
 
         # extract features
@@ -300,6 +307,7 @@ class Step2PointPointCloud(DataModule):
 
     def __init__(self, 
                  data_dir,
+                 parts=None,
                  sparse_batching=True,
                  **kwargs):
         super().__init__(data_dir=data_dir, **kwargs)        
@@ -394,40 +402,64 @@ class Step2PointPointCloud(DataModule):
     def _save_datasets(self):
 
         for split in self.datasets:
+
             data = self.datasets[split]
+            source_files = data["source_file"].unique()
             print(f"Saving {split} dataset")
-            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
-            np.savez(
-                filepath,
-                event_id = data["event_id"].to_numpy(),
-                energy = data["energy"].to_numpy(),
-                position_x = data["position_x"].to_numpy(),
-                position_y = data["position_y"].to_numpy(),
-                position_z = data["position_z"].to_numpy(), 
-                time = data["time"].to_numpy(),
-                label = data["label"].to_numpy(),
-            )
-        print("Finished saving data")
+            
+            for f in source_files:
+                
+                basename = os.path.basename(f)
+                part_str = basename.split("_")[-1]
+                part = int(part_str.replace("file", "").replace(".h5", ""))
+
+                data_filtered = data.copy()
+                data_filtered = data_filtered[data_filtered["source_file"]==f]
+                filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.npz")
+                np.savez(
+                    filepath,
+                    event_id = data_filtered["event_id"].to_numpy(),
+                    energy = data_filtered["energy"].to_numpy(),
+                    position_x = data_filtered["position_x"].to_numpy(),
+                    position_y = data_filtered["position_y"].to_numpy(),
+                    position_z = data_filtered["position_z"].to_numpy(), 
+                    time = data_filtered["time"].to_numpy(),
+                    label = data_filtered["label"].to_numpy(),
+                )
+            print("Finished saving data")
 
     def _load_dataset(self):
         for split in self.datasets:
-            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
-            if not os.path.exists(filepath):
-                raise FileNotFoundError(f"Required file is missing: {filepath}")
 
-            print(f"Loading {split} dataset from {filepath}")
-            data = np.load(filepath)
-            df = pd.DataFrame({
-                "event_id": data["event_id"],
-                "energy": data["energy"],
-                "position_x": data["position_x"],
-                "position_y": data["position_y"],
-                "position_z": data["position_z"],
-                "time": data["time"],
-                "label": data["label"]
-            })
+            pattern = os.path.join(self.data_dir, f"{self.name}_{split}_*.npz")
+            file_paths = sorted(glob.glob(pattern))
 
-            self.datasets[split] = df
+            if self.parts:
+                file_paths = file_paths[:self.parts]
+
+            if len(file_paths) == 0:
+                raise FileNotFoundError(f"No files found for pattern: {pattern}")
+
+            print(f"Loading {split} dataset from {len(file_paths)} files")
+
+            dfs = []
+
+            for f in file_paths:
+
+                data = np.load(f)
+                df = pd.DataFrame({
+                    "event_id": data["event_id"],
+                    "energy": data["energy"],
+                    "position_x": data["position_x"],
+                    "position_y": data["position_y"],
+                    "position_z": data["position_z"],
+                    "time": data["time"],
+                    "label": data["label"]
+                })
+                dfs.append(df)
+
+
+            self.datasets[split] = pd.concat(dfs, ignore_index=True)
 
         print("Finished loading datasets")
 
