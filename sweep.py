@@ -49,7 +49,7 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    save_leaderboard(top_runs=top_runs, save_dir=search_dir)
+        save_leaderboard(top_runs=top_runs, save_dir=search_dir)
 
 def fully_connected_net_config(config):
 
