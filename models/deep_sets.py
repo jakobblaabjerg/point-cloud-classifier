@@ -1,16 +1,18 @@
 import torch
 import torch.nn as nn
 
+
+
 class DeepSets(nn.Module):
     def __init__(self, 
                  input_dim: int,
                  phi_layers: list,
                  rho_layers: list,  
                  output_dim: int,
+                 sparse_batching: bool = True,
                  pooling: str = "sum" # mean, max, or sum
                  ):
         super().__init__()
-
 
         # phi network (point encoder)
         phi = []
@@ -42,24 +44,69 @@ class DeepSets(nn.Module):
             raise ValueError("pooling must be 'mean', 'sum', or 'max'")
         self.pooling = pooling
 
+        self.sparse_batching = sparse_batching
 
-    def forward(self, x):
+
+    def _forward_sparse(self, x: torch.Tensor, idx: torch.Tensor):
         """
-        x: [batch, num_points, input_dim]
+        Sparse forward pass.
+        
+        x: [sum(N_hits_i), input_dim] all points concatenated
+        idx: [sum(N_hits_i)] event index for each point
         """
-        # Apply phi to each point
-        phi_x = self.phi(x)  # [B, N, H]
+        # encode each point
+        phi_x = self.phi(x)  # [sum(N_hits_i), H]
 
-        # Pool over points (DeepSets uses sum pooling)
+        counts = torch.bincount(idx)
+        chunks = torch.split(phi_x, counts.tolist(), dim=0)
 
-        if self.pooling == "mean":
-            pooled = phi_x.mean(dim=1)
-        elif self.pooling == "sum":
-            pooled = phi_x.sum(dim=1)
-        elif self.pooling == "max":
-            pooled = phi_x.max(dim=1)[0]
+        pooled_list = []
 
-        # Apply rho
+        for chunk in chunks:
+            if self.pooling == "sum":
+                #pooled_list.append(chunk.sum(dim=0) / chunk.size(0).sqrt())
+                pooled_list.append(chunk.sum(dim=0) / torch.sqrt(torch.tensor(chunk.size(0), dtype=chunk.dtype)))
+                #pooled_list.append(chunk.sum(dim=0))
+            elif self.pooling == "mean":
+                pooled_list.append(chunk.mean(dim=0))
+            elif self.pooling == "max":
+                pooled_list.append(chunk.max(dim=0)[0])
+
+        pooled = torch.stack(pooled_list)  # [B, H]
+
+        # print("pooled mean:", pooled.mean(dim=0))
+        # print("pooled std:", pooled.std(dim=0))
+
+        # encode set
         logits = self.rho(pooled)  # [B, output_dim]
 
         return logits
+
+    def _forward_padded(self, x: torch.Tensor, mask: torch.Tensor):
+        """
+        Padded forward pass.
+        x:    [B, N_max, input_dim]
+        mask: [B, N_max]  1 for valid points, 0 for padding
+        """
+        phi_x = self.phi(x)  # [B, N_max, H]
+        phi_x = phi_x * mask.unsqueeze(-1)  # zero out padded points
+
+        if self.pooling == "sum":
+            pooled = phi_x.sum(dim=1)
+        elif self.pooling == "mean":
+            lengths = mask.sum(dim=1, keepdim=True).clamp(min=1.0)  # avoid division by 0
+            pooled = phi_x.sum(dim=1) / lengths
+        elif self.pooling == "max":
+            # mask padded points with a very negative value so they don't affect max
+            phi_x = phi_x.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
+            pooled = phi_x.max(dim=1)[0]
+
+        logits = self.rho(pooled)  # [B, output_dim]
+        return logits
+
+  
+    def forward(self, *args):
+        if self.sparse_batching:
+            return self._forward_sparse(*args)            
+        else:
+            return self._forward_padded(*args)

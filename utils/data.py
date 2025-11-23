@@ -282,21 +282,21 @@ class Step2PointTabular(DataModule):
         return DataLoader(TensorDataset(X_tensor, y_tensor), batch_size=self.batch_size, shuffle=(split=="train"))
 
 
-    def get_train_data(self):
+    def get_train_loader(self):
         split ="train"
         if self.convert_to_tensor:
             return self._convert_to_tensor(self.datasets[split], split)
         else:
             return self.datasets[split]
 
-    def get_val_data(self):
+    def get_val_loader(self):
         split="val"
         if self.convert_to_tensor:
             return self._convert_to_tensor(self.datasets[split], split)
         else:
             return self.datasets[split]
 
-    def get_test_data(self):
+    def get_test_loader(self):
         split="test"
         if self.convert_to_tensor:
             return self._convert_to_tensor(self.datasets[split], split)
@@ -318,6 +318,7 @@ class Step2PointPointCloud(DataModule):
         super().__init__(data_dir=data_dir, **kwargs)        
         self.name = "S2PPC"
 
+        self.parts = parts
 
         if sparse_batching:
             self.collate_fn = self._collate_sparse
@@ -393,6 +394,15 @@ class Step2PointPointCloud(DataModule):
             "time": data["time"]
         })
 
+        # sum energy per event
+        df_grouped = df.groupby("event_id")["energy"].sum().reset_index()
+        df_grouped = df_grouped.rename(columns={"energy": "energy_total"})
+
+        # merge back to original df
+        df = df.merge(df_grouped, on="event_id", how="left")
+
+        df["energy"] = df["energy"]/df["energy_total"]
+
         df["label"] = particle
         df["label"] = df["label"].map({"proton": 0, "piM": 1})
 
@@ -425,6 +435,7 @@ class Step2PointPointCloud(DataModule):
                     filepath,
                     event_id = df_part["event_id"].to_numpy(),
                     energy = df_part["energy"].to_numpy(),
+                    energy_total = df_part["energy_total"].to_numpy(),
                     position_x = df_part["position_x"].to_numpy(),
                     position_y = df_part["position_y"].to_numpy(),
                     position_z = df_part["position_z"].to_numpy(), 
@@ -455,6 +466,7 @@ class Step2PointPointCloud(DataModule):
                 df = pd.DataFrame({
                     "event_id": data["event_id"],
                     "energy": data["energy"],
+                    "energy_total": data["total_energy"],
                     "position_x": data["position_x"],
                     "position_y": data["position_y"],
                     "position_z": data["position_z"],
@@ -476,12 +488,13 @@ class Step2PointPointCloud(DataModule):
         lengths:        (B,)
         labels:         (B,1)
         """
-        features_list, labels = zip(*batch)
-        features = torch.cat(features_list, dim=0)
-        lengths = torch.tensor([f.size(0) for f in features_list]).long()
+        features, labels = zip(*batch)
+        x = torch.cat(features, dim=0)
+        idx = torch.cat([torch.full((f.size(0),), i, dtype=torch.long) 
+                     for i, f in enumerate(features)])
         labels = torch.stack(labels).float()
 
-        return features, lengths, labels
+        return x, idx, labels
 
 
     def _collate_padded(self, batch):
@@ -490,25 +503,25 @@ class Step2PointPointCloud(DataModule):
         mask:   (B, N_max)
         labels: (B,1)
         """
-        features_list, labels_list = zip(*batch)
+        features, labels_list = zip(*batch)
         B = len(batch)
-        lengths = [f.size(0) for f in features_list]
+        lengths = [f.size(0) for f in features]
         N_max = max(lengths)
 
-        F = features_list[0].size(1)
+        F = features[0].size(1)
 
-        features = torch.zeros((B, N_max, F))
+        x = torch.zeros((B, N_max, F))
         mask  = torch.zeros((B, N_max))
 
-        for i, f in enumerate(features_list):
+        for i, f in enumerate(features):
             
             n = f.size(0)
-            features[i, :n] = f
+            x[i, :n] = f
             mask[i, :n] = 1.0
 
         labels = torch.stack(labels_list).float()
 
-        return features, mask, labels
+        return x, mask, labels
 
 
 

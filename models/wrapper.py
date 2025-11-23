@@ -35,11 +35,37 @@ class ModelWrapper:
             self.model.train()
             batch_losses = []
             loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", leave=False)
-            for batch_X, batch_y in loop:
-                batch_X = batch_X.to(self.device) 
-                batch_y = batch_y.float().to(self.device)
+            for batch in loop:
+
+                if len(batch) == 2:
+                    batch_X, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    logits = self.model(batch_X)
+
+                elif len(batch) == 3:
+                    batch_X, batch_aux, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_aux = batch_aux.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    logits = self.model(batch_X, batch_aux)
+
+                # print("logits:", logits[:5].detach().cpu().numpy().flatten())
+                # print("logits mean:", logits.mean().item(), "std:", logits.std().item())
+                # print("labels mean:", batch_y.mean().item())
+                # print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
+
+                # if len(batch) == 3:
+                #     # Sparse batching — check counts
+                #     print("aux shape:", batch_aux.shape)
+                #     print("aux unique:", torch.unique(batch_aux))
+
+
+                # print(torch.unique(batch_y))
+                # print(logits.shape, batch_y.shape)
+                # print(batch_y.mean())
+                # break
                 optimizer.zero_grad()
-                logits = self.model(batch_X)
                 loss = criterion(logits, batch_y)
                 loss.backward()
                 optimizer.step()
@@ -49,9 +75,20 @@ class ModelWrapper:
             epoch_loss = sum(batch_losses) / len(batch_losses)
             writer.add_scalar("Loss/train", epoch_loss, epoch)
 
-            y_true_train, y_pred_train = self.predict(train_loader)
-            train_acc = (y_true_train == y_pred_train).mean()
-            writer.add_scalar("Accuracy/train", train_acc, epoch)
+            # y_true_train, y_pred_train = self.predict(train_loader)
+            # train_acc = (y_true_train == y_pred_train).mean()
+            # writer.add_scalar("Accuracy/train", train_acc, epoch)
+
+            print("logits:", logits[:5].detach().cpu().numpy().flatten())
+            print("logits mean:", logits.mean().item(), "std:", logits.std().item())
+            print("labels mean:", batch_y.mean().item())
+            print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
+
+            if len(batch) == 3:
+                # Sparse batching — check counts
+                print("aux shape:", batch_aux.shape)
+                print("aux unique:", torch.unique(batch_aux))
+
 
             if val_loader:
 
@@ -61,10 +98,21 @@ class ModelWrapper:
 
 
                 with torch.no_grad():
-                    for batch_X, batch_y in val_loader:
-                        batch_X = batch_X.to(self.device)
-                        batch_y = batch_y.to(self.device)
-                        logits = self.model(batch_X)
+                    for batch in val_loader:
+
+                        if len(batch) == 2:
+                            batch_X, batch_y = batch
+                            batch_X = batch_X.to(self.device)
+                            batch_y = batch_y.to(self.device)
+                            logits = self.model(batch_X)
+
+                        elif len(batch) == 3:
+                            batch_X, batch_aux, batch_y = batch
+                            batch_X = batch_X.to(self.device)
+                            batch_aux = batch_aux.to(self.device)
+                            batch_y = batch_y.to(self.device)
+                            logits = self.model(batch_X, batch_aux)
+
                         loss = criterion(logits, batch_y)
                         val_losses.append(loss.item())
 
@@ -103,10 +151,21 @@ class ModelWrapper:
         self.model.eval()
         y_true, y_pred, y_prob = [], [], []
         with torch.no_grad():
-            for batch_X, batch_y in data_loader:
-                batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
-                logits = self.model(batch_X)
+            for batch in data_loader:
+
+                if len(batch) == 2:
+                    batch_X, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    logits = self.model(batch_X)
+
+                elif len(batch) == 3:
+                    batch_X, batch_aux, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_aux = batch_aux.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    logits = self.model(batch_X, batch_aux)
+
                 probs = torch.sigmoid(logits)
                 preds = (probs >= 0.5).float()
                 y_true.append(batch_y.cpu())
@@ -130,5 +189,5 @@ class ModelWrapper:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
     def load(self, model_path):
-        self.model.load_state_dict(torch.load(model_path, map_location=self.model.device))
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.model.to(self.device)

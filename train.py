@@ -52,6 +52,19 @@ def get_model(model_name, config, model_dir=None):
             model.load()
             print(f"Loaded FullyConnectedNet model from {model_path}")             
     
+
+    elif model_name == "deep_sets":
+
+        model = DeepSets(**config["model"]) 
+        model = ModelWrapper(model, **config["trainer"], **config["logging"])
+
+        if model_dir is not None:
+            model_path = os.path.join(model_dir, "model.pt")
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"FullyConnectedNet model not found at {model_path}")
+            model.load()
+            print(f"Loaded DeepSets model from {model_path}")    
+
     else:
         raise ValueError(f"Unknown model: {model_name}")
     
@@ -98,8 +111,8 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
     dataloader = get_dataloader(dataset_name=dataset_name, config=config)
     model = get_model(model_name=model_name, config=config)
 
-    train_loader = dataloader.get_train_data()
-    val_loader = dataloader.get_val_data()
+    train_loader = dataloader.get_train_loader()
+    val_loader = dataloader.get_val_loader()
 
     # fit model
     model.fit(train_loader, val_loader)
@@ -129,9 +142,10 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
 
 if __name__ == "__main__": 
 
-    model = "fully_connected_net"
+#    model = "fully_connected_net"
 #    model = "logistic_regression"
-    dataset = "s2pt" 
+    model = "deep_sets"
+    dataset = "s2ppc" 
     config = load_config("configs/base.yaml", f"configs/{model}.yaml")
     train_model(model, dataset, config, plots=True)
 

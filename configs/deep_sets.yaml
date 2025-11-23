@@ -1,11 +1,15 @@
 model:
-  input_dim: 4
-  hidden_layers: [32, 32, 64]
+  input_dim: 5
+  phi_layers: [64, 64, 64]
+  rho_layers: [64, 64, 64]
   output_dim: 1
-  epochs: 100
-  learning_rate: 0.001 
-  batch_normalization: true
+  sparse_batching: true
+  pooling: "mean"
 
 dataset:
-  convert_to_tensor: true
   batch_size: 32
+  sparse_batching: true
+
+trainer:
+  epochs: 8
+  learning_rate: 0.001 
