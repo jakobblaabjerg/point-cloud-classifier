@@ -71,7 +71,7 @@ class DataModule():
         "test": []
         }
 
-        global_event_id = 0
+        event_id_offset = 0
 
         for particle in self.particles:
             files = self._find_files(particle)
@@ -79,11 +79,11 @@ class DataModule():
             for f in files:
                 print(os.path.basename(f))
                 data_raw = self._load_h5py_file(f)
+                num_events = len(np.unique(data_raw["event_id"]))
                 data_preprocessed  = self._preprocess_data(data_raw, particle)
                 data_preprocessed["source_file"] = os.path.basename(f)
-                num_events = data_preprocessed["event_id"].nunique()
-                data_preprocessed["event_id"] = data_preprocessed["event_id"]+global_event_id
-                global_event_id += num_events
+                data_preprocessed["event_id"] = data_preprocessed["event_id"]+event_id_offset
+                event_id_offset += num_events
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
                 self.datasets["train"].append(train_df)
                 self.datasets["val"].append(val_df)
@@ -92,6 +92,12 @@ class DataModule():
         # concatenate each split
         for split in self.datasets:
             self.datasets[split] = pd.concat(self.datasets[split], ignore_index=True)
+
+        total_events = 0
+        for split in self.datasets:
+            total_events += len(set(self.datasets[split]["event_id"]))
+        assert event_id_offset == total_events
+
 
         if self.feature_scaling:
             self._scale_features()
@@ -104,25 +110,7 @@ class DataModule():
 
 
 
-    def _split_dataset(self, dataset):
 
-        train_frac, val_frac, test_frac = self.data_split
-
-        train_df, test_df = train_test_split(
-            dataset, 
-            test_size=test_frac, 
-            stratify=dataset["label"], 
-            random_state=42
-        )
-
-        train_df, val_df = train_test_split(
-            train_df,
-            test_size=val_frac/(train_frac+val_frac),
-            stratify=train_df["label"],
-            random_state=42
-        )
-
-        return train_df, val_df, test_df
 
     def _scale_features(self):
 
@@ -149,6 +137,41 @@ class DataModule():
             df_scaled = self.datasets[split].copy()
             df_scaled[feature_cols] = X_scaled
             self.datasets[split] = df_scaled
+
+
+    def _remap_event_ids(self, df):
+        df = df.copy()
+        unique_event_ids = df["event_id"].unique()
+        mapping = {old: new for new, old in enumerate(unique_event_ids)}
+        df["event_id"] = df["event_id"].map(mapping)
+
+        return df
+
+    def _split_dataset(self, dataset):
+        # should ideally be moved upstream
+        train_frac, val_frac, test_frac = self.data_split
+
+        event_ids = dataset["event_id"].unique()
+
+        train_ids, test_ids = train_test_split(
+            event_ids, 
+            test_size=test_frac,
+            stratify=dataset.groupby("event_id")["label"].first(),
+            random_state=42
+        )
+
+        train_ids, val_ids = train_test_split(
+            train_ids,
+            test_size=val_frac / (val_frac + train_frac),
+            stratify=dataset.groupby("event_id")["label"].first().loc[train_ids],
+            random_state=42
+        )
+
+        train_df = dataset[dataset["event_id"].isin(train_ids)]
+        val_df   = dataset[dataset["event_id"].isin(val_ids)]
+        test_df  = dataset[dataset["event_id"].isin(test_ids)]
+
+        return train_df, val_df, test_df
 
 
 class Step2PointTabular(DataModule):
@@ -303,7 +326,25 @@ class Step2PointTabular(DataModule):
         else:
             return self.datasets[split]
 
+    def _split_dataset(self, dataset):
 
+        train_frac, val_frac, test_frac = self.data_split
+
+        train_df, test_df = train_test_split(
+            dataset, 
+            test_size=test_frac, 
+            stratify=dataset["label"], 
+            random_state=42
+        )
+
+        train_df, val_df = train_test_split(
+            train_df,
+            test_size=val_frac/(train_frac+val_frac),
+            stratify=train_df["label"],
+            random_state=42
+        )
+
+        return train_df, val_df, test_df
 
 
 
@@ -403,6 +444,14 @@ class Step2PointPointCloud(DataModule):
 
         df["energy"] = df["energy"]/df["energy_total"]
 
+
+        # compute min and max per event
+        tmin = df.groupby("event_id")["time"].transform("min")
+        tmax = df.groupby("event_id")["time"].transform("max")
+        df["time"] = (df["time"] - tmin) / (tmax - tmin + 1e-8)
+
+
+        df = self._remap_event_ids(df)
         df["label"] = particle
         df["label"] = df["label"].map({"proton": 0, "piM": 1})
 
@@ -466,7 +515,7 @@ class Step2PointPointCloud(DataModule):
                 df = pd.DataFrame({
                     "event_id": data["event_id"],
                     "energy": data["energy"],
-                    "energy_total": data["total_energy"],
+                    "energy_total": data["energy_total"],
                     "position_x": data["position_x"],
                     "position_y": data["position_y"],
                     "position_z": data["position_z"],
@@ -522,8 +571,6 @@ class Step2PointPointCloud(DataModule):
         labels = torch.stack(labels_list).float()
 
         return x, mask, labels
-
-
 
 
 
