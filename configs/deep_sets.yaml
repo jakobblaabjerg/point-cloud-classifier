@@ -1,10 +1,13 @@
 model:
   input_dim: 6
-  phi_layers: [64, 64, 64]
-  rho_layers: [64, 64, 64]
+  phi_layers: [64, 64]
+  rho_layers: [64, 64]
   output_dim: 1
   sparse_batching: true
   pooling: "mean"
+  layer_norm: true
+  activation: "gelu"
+  residual_block = false
 
 dataset:
   batch_size: 32
@@ -13,3 +16,4 @@ dataset:
 trainer:
   epochs: 100
   learning_rate: 0.001 
+  optimizer: "adam"

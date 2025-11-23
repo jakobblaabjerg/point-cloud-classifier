@@ -115,10 +115,10 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
     val_loader = dataloader.get_val_loader()
 
     # fit model
+    save_config(config=config, log_dir=log_dir)
     model.fit(train_loader, val_loader)
     model.save(save_dir=log_dir) 
-    save_config(config=config, log_dir=log_dir)
-
+    
     # predict 
     y_true_train, y_pred_train = model.predict(train_loader)
     y_true_val, y_pred_val = model.predict(val_loader)

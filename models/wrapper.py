@@ -11,7 +11,8 @@ class ModelWrapper:
                  model,
                  learning_rate, 
                  epochs, 
-                 log_dir
+                 log_dir,
+                 optimizer = "adam"
                  ):
         
         self.model = model
@@ -25,10 +26,15 @@ class ModelWrapper:
         self.checkpoint_path = os.path.join(self.log_dir, "best_model.pt") if log_dir else None
         self.model.to(self.device)
 
+        if optimizer == "adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        elif optimizer == "adamw":
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate)
+
     def fit(self, train_loader, val_loader=None):
 
         criterion = nn.BCEWithLogitsLoss() 
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        
         writer = SummaryWriter(self.log_dir)
 
         for epoch in range(self.epochs):
@@ -65,10 +71,10 @@ class ModelWrapper:
                 # print(logits.shape, batch_y.shape)
                 # print(batch_y.mean())
                 # break
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
                 loss = criterion(logits, batch_y)
                 loss.backward()
-                optimizer.step()
+                self.optimizer.step()
                 batch_losses.append(loss.item())
                 loop.set_postfix(loss=loss.item())
 

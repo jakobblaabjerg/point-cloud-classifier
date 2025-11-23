@@ -10,7 +10,7 @@ import torch
 import gc
 import json
 
-def run_search(model_name, dataset_name, search_dir: str, max_runs=30):
+def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
 
     config = load_config("configs/base.yaml", f"configs/{model_name}.yaml")
     search_dir = os.path.abspath(search_dir)
@@ -18,7 +18,7 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=30):
     create_search_dir(search_dir=search_dir)
 
     config["logging"]["log_dir"] = search_dir
-    config["model"]["epochs"] = 10
+    config["trainer"]["epochs"] = 15
 
     top_runs = []  
     print(f"Starting hyperparameter search ({max_runs} runs)...")
@@ -27,15 +27,22 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=30):
 
         if model_name == "fully_connected_net":
             hp_config = fully_connected_net_config(config=config)
+        elif model_name == "deep_sets":
+            hp_config = deep_sets_config(config=config)
 
-        version_dir = train_model(
-            model_name=model_name, 
-            dataset_name=dataset_name, 
-            config=hp_config,
-            return_log_dir=True
-            )
+        try:
 
-        update_leaderboard(top_runs=top_runs, version_dir=version_dir)
+            version_dir = train_model(
+                model_name=model_name, 
+                dataset_name=dataset_name, 
+                config=hp_config,
+                return_log_dir=True
+                )
+
+            update_leaderboard(top_runs=top_runs, version_dir=version_dir)
+        
+        except Exception as e:
+            print(f"[Run {i+1}/{max_runs}] Configuration failed: {e}")
 
         # free memory 
         gc.collect()
@@ -56,6 +63,32 @@ def fully_connected_net_config(config):
     hp_config["dataset"]["batch_size"] = int(np.random.choice([32, 64]))
 
     return hp_config
+
+def deep_sets_config(config):
+
+    # random sampling
+    hp_config = deepcopy(config)
+
+    phi_dim = int(np.random.choice([32, 64, 128, 256]))
+    phi_n_layers = int(np.random.choice([1, 2, 3, 4]))
+    hp_config["model"]["phi_layers"] = [phi_dim for i in range(phi_n_layers)]
+
+    rho_dim = int(np.random.choice([32, 64, 128, 256]))
+    rho_n_layers = int(np.random.choice([1, 2, 3, 4]))
+    hp_config["model"]["rho_layers"] = [rho_dim for i in range(rho_n_layers)]
+    
+    hp_config["model"]["pooling"] = str(np.random.choice(["max", "mean"]))
+    hp_config["model"]["layer_norm"] = bool(np.random.choice([True, False]))
+    hp_config["model"]["activation"] = str(np.random.choice(["gelu", "relu", "silu"]))
+    hp_config["model"]["residual_block"] = bool(np.random.choice([True, False]))
+    hp_config["trainer"]["learning_rate"] = 10 ** np.random.uniform(-4, -2)    
+    hp_config["trainer"]["optimizer"] = str(np.random.choice(["adam", "adamw"]))
+
+    hp_config["dataset"]["batch_size"] = int(np.random.choice([32, 64, 128]))
+
+    return hp_config
+
+
 
 def update_leaderboard(top_runs, version_dir):
     meta_path = os.path.join(version_dir, "meta.json")
@@ -82,8 +115,8 @@ def update_leaderboard(top_runs, version_dir):
     })
 
     top_runs.sort(key=lambda x: x["val_acc"], reverse=True)
-    if len(top_runs) > 3:
-        del top_runs[3:]
+    if len(top_runs) > 30:
+        del top_runs[30:]
 
 
 def save_leaderboard(top_runs, save_dir):
@@ -112,8 +145,8 @@ def create_search_dir(search_dir):
 
 if __name__ == "__main__":
 
-    model = "fully_connected_net"
-    dataset = "s2pt" 
+    model = "deep_sets"
+    dataset = "s2ppc" 
     search_dir = "search_runs"
 
     run_search(
