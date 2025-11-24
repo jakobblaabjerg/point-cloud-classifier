@@ -5,7 +5,7 @@ model:
   output_dim: 1
   sparse_batching: true
   pooling: "mean"
-  layer_norm: true
+  layer_norm: false
   activation: "gelu"
   residual_block: false
 
@@ -16,4 +16,4 @@ dataset:
 trainer:
   epochs: 100
   learning_rate: 0.001 
-  optimizer: "adam"
+  optimizer: "adamw"
