@@ -7,7 +7,7 @@ model:
   pooling: "mean"
   layer_norm: true
   activation: "gelu"
-  residual_block = false
+  residual_block: false
 
 dataset:
   batch_size: 32

@@ -69,22 +69,22 @@ def deep_sets_config(config):
     # random sampling
     hp_config = deepcopy(config)
 
-    phi_dim = int(np.random.choice([32, 64, 128, 256]))
+    phi_dim = int(np.random.choice([128, 256, 512, 1024]))
     phi_n_layers = int(np.random.choice([1, 2, 3, 4]))
     hp_config["model"]["phi_layers"] = [phi_dim for i in range(phi_n_layers)]
 
-    rho_dim = int(np.random.choice([32, 64, 128, 256]))
-    rho_n_layers = int(np.random.choice([1, 2, 3, 4]))
+    rho_dim = int(np.random.choice([128, 256, 512, 1024]))
+    rho_n_layers = int(np.random.choice([1, 2, 3]))
     hp_config["model"]["rho_layers"] = [rho_dim for i in range(rho_n_layers)]
     
-    hp_config["model"]["pooling"] = str(np.random.choice(["max", "mean"]))
-    hp_config["model"]["layer_norm"] = bool(np.random.choice([True, False]))
-    hp_config["model"]["activation"] = str(np.random.choice(["gelu", "relu", "silu"]))
+
+    # hp_config["model"]["layer_norm"] = bool(np.random.choice([True, False]))
+    hp_config["model"]["activation"] = str(np.random.choice(["gelu", "silu"]))
     hp_config["model"]["residual_block"] = bool(np.random.choice([True, False]))
     hp_config["trainer"]["learning_rate"] = 10 ** np.random.uniform(-4, -2)    
-    hp_config["trainer"]["optimizer"] = str(np.random.choice(["adam", "adamw"]))
+    # hp_config["trainer"]["optimizer"] = str(np.random.choice(["adam", "adamw"]))
 
-    hp_config["dataset"]["batch_size"] = int(np.random.choice([32, 64, 128]))
+    hp_config["dataset"]["batch_size"] = int(np.random.choice([16, 32, 64]))
 
     return hp_config
 
