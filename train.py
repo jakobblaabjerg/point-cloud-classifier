@@ -142,8 +142,8 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
 
 if __name__ == "__main__": 
 
-#    model = "fully_connected_net"
-#    model = "logistic_regression"
+    #model = "fully_connected_net"
+    #model = "logistic_regression"
     model = "deep_sets"
     dataset = "s2ppc" 
     config = load_config("configs/base.yaml", f"configs/{model}.yaml")
