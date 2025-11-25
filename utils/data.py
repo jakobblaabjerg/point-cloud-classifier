@@ -656,7 +656,7 @@ class Step2PointGraph(DataModule):
         df_particles_grouped = df_particles.groupby("event_id")
     
         graphs = []
-        count = 0
+        # count = 0
         event_ids = df_steps["event_id"].unique()
 
         for event in event_ids:
@@ -710,17 +710,13 @@ class Step2PointGraph(DataModule):
             
             key_list = df_steps_event["unique_key"].tolist()
             
-            if in_degree_list[new_key] == 0:
-                print("Incident particle has 0 parents")
-            else:
+            if in_degree_list[new_key] != 0:
                 print("Incident particle has parents, which should not happen")
 
             bad_nodes = [k for k, deg in enumerate(in_degree_list[:-1]) if deg == 0]
 
             if len(bad_nodes) > 0:
-                print("Nodes with no parents found")
-            else:
-                print("No nodes with no parents found")
+                print(f"{len(bad_nodes)} nodes with no parents found")
 
             graph = {
                 "event_id": event,
@@ -734,32 +730,15 @@ class Step2PointGraph(DataModule):
         
             graphs.append(graph)
 
-            count += 1 
-            if count ==5:
-                break
+            # count += 1 
+            # if count ==5:
+            #     break
 
         # remap event_id
         for new_id, g in enumerate(graphs):
             g["event_id"] = new_id
 
         return graphs 
-
-
-
-        # do this later!
-        # remap event id
-        # 
-        # df_particles = df_particles[df_particles["event_id"].isin(event_ids)]
-
-        # event_map = {old: new for new, old in enumerate(event_ids)}
-        # df_steps["event_id"] = df_steps["event_id"].map(event_map)
-        # df_particles["event_id"] = df_particles["event_id"].map(event_map)
-
-        # assert len(df_steps["event_id"].unique()) == len(df_particles["event_id"].unique())
-
-
-
-        # create a unique id for each step based on particle id and time
 
 
 
