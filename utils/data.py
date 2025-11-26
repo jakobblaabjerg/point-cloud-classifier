@@ -602,6 +602,7 @@ class Step2PointPointCloud(DataModule):
 
 
 
+
 class Step2PointGraph(DataModule):
     
     def __init__(self, 
@@ -628,6 +629,13 @@ class Step2PointGraph(DataModule):
         # shape (total nodes in batch)
         # each node indicate its membership
 
+        if self.create_dataset:
+            print("Creating Step2PointGraph (S2PG) dataset")
+            self._create_dataset()
+        else:
+            self._load_dataset()
+
+
        
 
     def _preprocess_data(self, data, particle):
@@ -639,16 +647,17 @@ class Step2PointGraph(DataModule):
             "position_y": data["position"][:, 1],
             "position_z": data["position"][:, 2],
             "time": data["time"],
-            "particle_id": data["mcparticle_id"][:]
+            "particle_id": data["mcparticle_id"]
         })
 
         df_particles = pd.DataFrame({
             "event_id": data["particle_event_id"],
             "particle_id": data["particle_id"],
-            "parent_particle_id": data["parent_id"],
+            "parent_particle_id": data["parent_id"]
         })
 
-        df_steps = df_steps.sort_values(["event_id", "particle_id", "time"]) 
+
+        df_steps = df_steps.sort_values(["event_id", "particle_id", "time"]).reset_index(drop=True)
         df_steps["unique_key"] = df_steps.groupby("event_id").cumcount()
 
         
@@ -656,22 +665,23 @@ class Step2PointGraph(DataModule):
         df_particles_grouped = df_particles.groupby("event_id")
     
         graphs = []
-        # count = 0
         event_ids = df_steps["event_id"].unique()
 
         for event in event_ids:
+            
+            if event == 10:
+                break
 
             print("Event:", event)
 
             df_steps_event = df_steps_grouped.get_group(event).copy()
             df_particles_event = df_particles_grouped.get_group(event).copy()
 
-            incident = df_particles_event.loc[df_particles_event["parent_particle_id"]==-1, "particle_id"]
-            assert len(incident) == 1, f"Event {event}: expected 1 primary particle, found {len(incident)}"
-            assert incident.iloc[0] == 0, f"Event {event}: primary particle ID is not 0"
-
-            incident_id = incident.iloc[0] 
-            new_key = df_steps_event["unique_key"].max()+1
+            incident_series = df_particles_event.loc[df_particles_event["parent_particle_id"] == -1, "particle_id"]
+            assert len(incident_series) == 1, f"Event {event}: expected 1 primary particle, found {len(incident_series)}"
+            assert incident_series.iloc[0] == 0, f"Event {event}: primary particle ID is not 0"
+            incident_id = int(incident_series.iloc[0]) 
+            incident_key = df_steps_event["unique_key"].max()+1
 
             incident_step = {
                 "event_id": event,
@@ -681,46 +691,65 @@ class Step2PointGraph(DataModule):
                 "position_z": 0.0,
                 "time": 0.0,
                 "particle_id": incident_id,
-                "unique_key": new_key  
+                "unique_key": incident_key  
             }
-            
-            # it is not necessary to insert to df_steps only df_steps_event only
+
             df_steps_event = pd.concat([df_steps_event, pd.DataFrame([incident_step])], ignore_index=True)
-           
-            particle_links = self._build_particle_links(df_steps_event, df_particles_event)
 
-            child_keys = particle_links["unique_key_child"]
-            parent_keys = particle_links["unique_key_parent"]
+            step_data_event = {
+                "particle_id": df_steps_event["particle_id"].to_numpy(),
+                "time": df_steps_event["time"].to_numpy(),
+                "energy": df_steps_event["energy"].to_numpy(),
+                "pos_x": df_steps_event["position_x"].to_numpy(),
+                "pos_y": df_steps_event["position_y"].to_numpy(),
+                "pos_z": df_steps_event["position_z"].to_numpy(),
+                "unique_key": df_steps_event["unique_key"].to_numpy()
+            }
 
-            parent_list = [[] for _ in range(new_key+1)]
-            child_list = [[] for _ in range(new_key+1)]
 
-            for child, parent in zip(child_keys, parent_keys):
-                parent_list[child].append(parent)
-                #parent_list[parent].append(child)
-                child_list[parent].append(child)
+            unique_particle_ids, inverse_idx = np.unique(step_data_event["particle_id"], return_inverse=True)
+            indices_by_particle = {}
+            for particle_id, grp_index in zip(unique_particle_ids, np.arange(len(unique_particle_ids))):    
+                indices = np.nonzero(inverse_idx == grp_index)[0]
+                indices_by_particle[int(particle_id)] = indices  # indices into df_steps_event
+
+
+            parent_map = {}  # child -> list of parent particle ids (empty list if none)
+            for _, row in df_particles_event.iterrows():
+                child = int(row["particle_id"])
+                parent = int(row["parent_particle_id"])
+                if child not in parent_map:
+                    parent_map[child] = []
+                if parent != -1:
+                    parent_map[child].append(parent)
+
+
+            links = self._find_links(unique_particle_ids, parent_map, step_data_event, indices_by_particle)
             
+            parent_list = [[] for _ in range(incident_key+1)]
+            child_list = [[] for _ in range(incident_key+1)]
+
+
+            assert len(step_data_event["pos_x"]) == len(parent_list)
+
+
+            for parent, child in links:
+                parent_list[child].append(parent)
+                child_list[parent].append(child)
+
             in_degree_list = [len(x) for x in parent_list]
             out_degree_list =  [len(x) for x in child_list]
-            
-            # df step events is sorted by uniiqe key so it will match parent list?
-            df_steps_event = df_steps_event.sort_values("unique_key").reset_index(drop=True)
-            df_steps_event["energy"] = df_steps_event["energy"]/df_steps_event["energy"].sum()
-            feature_list = df_steps_event[["energy", "position_x", "position_y", "position_z"]].to_numpy().astype(np.float32)
-            
-            key_list = df_steps_event["unique_key"].tolist()
-            
-            if in_degree_list[new_key] != 0:
-                print("Incident particle has parents, which should not happen")
 
-            bad_nodes = [k for k, deg in enumerate(in_degree_list[:-1]) if deg == 0]
-
-            if len(bad_nodes) > 0:
-                print(f"{len(bad_nodes)} nodes with no parents found")
-
+            feature_list = np.stack([
+                step_data_event["energy"]/sum(step_data_event["energy"]),
+                step_data_event["pos_x"],
+                step_data_event["pos_y"],
+                step_data_event["pos_z"]
+            ], axis=1)
+            
             graph = {
                 "event_id": event,
-                "unique_key": key_list,
+                "unique_key": step_data_event["unique_key"],
                 "features": feature_list, 
                 "parent": parent_list,
                 "child": child_list,
@@ -730,10 +759,21 @@ class Step2PointGraph(DataModule):
         
             graphs.append(graph)
 
-            # count += 1 
-            # if count ==5:
-            #     break
+            if in_degree_list[incident_key] != 0:
+                # print(incident_key)
+                # print(in_degree_list[incident_key])
+                # print(parent_list[incident_key])
+                # print(child_list[incident_key])
+                # print(feature_list[incident_key])
+                # print(step_data_event["particle_id"][parent_list[incident_key][0]])
+                print("Incident particle has parents, which should not happen")
 
+
+            unconnected_keys = [k for k, deg in enumerate(in_degree_list[:-1]) if deg == 0]
+
+            if len(unconnected_keys) > 0:
+                print(f"{len(unconnected_keys)} nodes with no parents found")
+   
         # remap event_id
         for new_id, g in enumerate(graphs):
             g["event_id"] = new_id
@@ -742,128 +782,111 @@ class Step2PointGraph(DataModule):
 
 
 
-    def _build_particle_links(self, df_steps, df_particles):
-        
-        particle_links_time = [] # links through time
-        particle_links_parent = [] # links from a particle to its parents(s)
-
-        # group dataset by particle id for faster access.
-        df_steps_grouped = {particle_id: group.copy() for particle_id, group in df_steps.groupby("particle_id")}
-
-        # loop through unique particle ids
-        unique_particle_ids = list(df_steps["particle_id"].unique())
-        unique_particle_ids.sort()    
 
 
+    def _find_links(self, unique_particle_ids, parent_map, step_data_event, indices_by_particle):
 
+        ancestor_steps_cache = {}
+        step_times = step_data_event["time"]
+        step_unique_key = step_data_event["unique_key"]
 
-        for particle_id in unique_particle_ids:
+        links_time = [] 
+        links_parent = [] 
 
-            # steps for current and parent(s) particles
-            steps_child_particle = df_steps_grouped.get(particle_id) 
-            steps_parent_particles = self._collect_parent_steps(particle_id, df_steps_grouped, df_particles)
+        for child_id in unique_particle_ids:
 
-            # allow one connection between parent and child
-            min_time = steps_child_particle["time"].min()
-            steps_child_particle_filtered = steps_child_particle.copy()
-            steps_child_particle_filtered = steps_child_particle_filtered[steps_child_particle_filtered["time"] == min_time]
-            # if len(steps_child_particle_filtered)>1:
-            #     print(f"Multiple rows found with identical time for particle {particle_id}")
-            #     print(len(steps_child_particle_filtered))  
             
-            if not steps_parent_particles.empty:
+            child_idxs = indices_by_particle.get(child_id)
+            child_idxs_sorted = child_idxs[np.argsort(step_times[child_idxs])]
+            n_steps = len(child_idxs)
+
+            if n_steps > 1:
+                for i in range(n_steps-1):
+                    parent_idx = child_idxs_sorted[i]
+                    k_parent = step_unique_key[parent_idx]
+                    child_idx = child_idxs_sorted[i+1]
+                    k_child = step_unique_key[child_idx]
+                    links_time.append((k_parent, k_child))
+
+
+
+            parent_ids = self.get_ancestor_steps(child_id, unique_particle_ids, parent_map, ancestor_steps_cache)
+            if len(parent_ids) == 0:
+                print(f"No parents exist for particle {child_id}")
+                continue
+            
+            child_times = step_times[child_idxs]
+            min_time = np.min(child_times)
+            min_time_idx_all = np.where(child_times==min_time)[0]                
+            child_idx_all = child_idxs[min_time_idx_all]   # idx in steps
+            child_keys = step_unique_key[child_idx_all]
+
+
+            for parent_id in parent_ids:
+
+                candidate_idxs = indices_by_particle.get(parent_id)
+                candidate_times = step_times[candidate_idxs]
+                candidate_delta_times = abs(candidate_times-min_time)
+                min_delta_time = np.min(candidate_delta_times)
+                min_delta_time_idx_all = np.where(candidate_delta_times==min_delta_time)[0]                  
+                parent_idx_all = candidate_idxs[min_delta_time_idx_all] # idx in steps
+                parent_keys = step_unique_key[parent_idx_all]
                 
-                steps_merged_parent = pd.merge(
-                    left=steps_child_particle_filtered, 
-                    right=steps_parent_particles, 
-                    how="cross", 
-                    suffixes=("_child", "_parent")
-                    ).copy()
+                for k_child in child_keys:
+                    for k_parent in parent_keys:
+                        links_parent.append((k_parent, k_child))
+
+        links = links_time + links_parent
+        return links 
+            
+
+    def get_ancestor_steps(self, particle_id, unique_particle_ids, parent_map, cache):
+
+        """Return indices (into df_steps_event) for pid or nearest ancestor with steps.
+            caches results per particle id."""
+
+
+        # if particle ancestor already exist in cache.
+        if particle_id in cache:
+            return cache[particle_id]  
+        
+        collected = []
+        visited = set()
+        queue = parent_map.get(particle_id, []).copy()
+
+
+        while queue:
+
+            cur = queue.pop(0)
+            cur = np.int64(cur)
+
+            if cur in visited:
+                continue
+            visited.add(cur)    
+
+            if cur not in unique_particle_ids:
                 
-                steps_best_match = self._select_best_parent_match(steps_merged_parent)
-                particle_links_parent.append(steps_best_match)
+                # look in cache 
+                if cur in cache:
+                    collected.extend(cache[cur])
+                    continue
+
+                # expand search
+                else:
+                    queue.extend(parent_map.get(cur, []))
 
             else:
-                print(f"No parents exist for particle with id: {particle_id}")
+                collected.append(cur)
+                for child, parents in parent_map.items():
+                    if cur in parents and child not in cache and len(parents)==1:
+                        cache[child] = [cur]
 
-            
-            # handle the reamining steps
-            n_duplicates = len(steps_child_particle)
-            if n_duplicates > 1:
-                steps_child_particle = steps_child_particle.sort_values(by='time')
-
-                for i in range(n_duplicates-1):
-
-                    current_row = steps_child_particle.iloc[[i]]   
-                    next_row = steps_child_particle.iloc[[i+1]]
-
-                    steps_merged_time = pd.merge(
-                        left=next_row, 
-                        right=current_row, 
-                        how="cross", 
-                        suffixes=("_child", "_parent")
-                        )
-
-                    steps_merged_time["delta_time"] = steps_merged_time["time_child"]-steps_merged_time["time_parent"]
-                    steps_merged_time["depth"] = 0
-                    particle_links_time.append(steps_merged_time)
-
-        particle_links_time = self._safe_concat(particle_links_time)
-        particle_links_parent = self._safe_concat(particle_links_parent)
-        return self._safe_concat([particle_links_parent, particle_links_time])
+        if collected:
+            cache[particle_id] = collected
+        return collected
 
 
-    def _safe_concat(self, dfs):
-        return pd.concat(dfs, axis=0, ignore_index=True) if dfs else pd.DataFrame()
 
-    def _select_best_parent_match(self, steps_merged):
-        
-        steps_merged["delta_time"] = steps_merged["time_child"]-steps_merged["time_parent"]
-        steps_merged["delta_time"] = abs(steps_merged["delta_time"])
-        min_delta = steps_merged.groupby(["particle_id_parent", "unique_key_child"])["delta_time"].transform("min")
-        steps_best_matches = steps_merged[steps_merged["delta_time"] == min_delta]
-        steps_best_matches = steps_best_matches.drop_duplicates()
-
-        return steps_best_matches
-                
-    def _collect_parent_steps(self, particle_id, df_steps_grouped, df_particles, current_depth=1, max_depth=20, visited=None):
-    
-        if current_depth > max_depth:
-            return pd.DataFrame()
-
-        if visited is None:
-            visited = set()
-
-        if particle_id in visited:
-            print("Cycle detected")
-        visited.add(particle_id)
-
-        parent_ids = self._find_parents(particle_id, df_particles)
-
-        collected_steps = []
-        
-        for parent_id in parent_ids:
-
-
-            df_steps_parent = df_steps_grouped.get(parent_id, pd.DataFrame()).copy()
-
-            if not df_steps_parent.empty:
-                df_steps_parent["depth"] = current_depth
-                collected_steps.append(df_steps_parent)
-            
-            # recurse upward
-            else:
-                df_steps_ancestor = self._collect_parent_steps(parent_id, df_steps_grouped, df_particles, current_depth+1, max_depth, visited=visited)
-                collected_steps.append(df_steps_ancestor)
-
-        return pd.concat(collected_steps, axis=0, ignore_index=True) if collected_steps else pd.DataFrame()
-
-
-    def _find_parents(self, particle_id, df_particles):
-    
-        df_particles_filtered = df_particles.copy()
-        df_particles_filtered = df_particles_filtered[(df_particles_filtered["particle_id"] == particle_id) & (df_particles_filtered["parent_particle_id"] != -1)]
-        return list(set(df_particles_filtered["parent_particle_id"]))
 
     def _split_dataset(self, dataset):
 
@@ -1093,5 +1116,5 @@ class Step2PointGraph(DataModule):
 
 if __name__ == "__main__":
 
-    data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\test"
-    Step2PointTabular(data_dir=data_dir, create_dataset=True)
+    data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
+    Step2PointGraph(data_dir=data_dir, create_dataset=True)
