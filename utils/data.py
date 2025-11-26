@@ -669,9 +669,6 @@ class Step2PointGraph(DataModule):
 
         for event in event_ids:
             
-            if event == 10:
-                break
-
             print("Event:", event)
 
             df_steps_event = df_steps_grouped.get_group(event).copy()
