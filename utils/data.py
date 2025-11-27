@@ -667,8 +667,7 @@ class Step2PointGraph(DataModule):
         graphs = []
         event_ids = df_steps["event_id"].unique()
 
-        for event in event_ids:
-            
+        for event in event_ids:          
             print("Event:", event)
 
             df_steps_event = df_steps_grouped.get_group(event).copy()
@@ -723,19 +722,19 @@ class Step2PointGraph(DataModule):
 
             links = self._find_links(unique_particle_ids, parent_map, step_data_event, indices_by_particle)
             
+            edge_list = [[] for _ in range(incident_key+1)]
             parent_list = [[] for _ in range(incident_key+1)]
-            child_list = [[] for _ in range(incident_key+1)]
 
-
-            assert len(step_data_event["pos_x"]) == len(parent_list)
+            assert len(step_data_event["pos_x"]) == len(edge_list)
 
 
             for parent, child in links:
+                edge_list[child].append(parent)
+                edge_list[parent].append(child)
                 parent_list[child].append(parent)
-                child_list[parent].append(child)
 
+            degree_list = [len(x) for x in edge_list]
             in_degree_list = [len(x) for x in parent_list]
-            out_degree_list =  [len(x) for x in child_list]
 
             feature_list = np.stack([
                 step_data_event["energy"]/sum(step_data_event["energy"]),
@@ -746,12 +745,10 @@ class Step2PointGraph(DataModule):
             
             graph = {
                 "event_id": event,
-                "unique_key": step_data_event["unique_key"],
+                "nodes": step_data_event["unique_key"],
                 "features": feature_list, 
-                "parent": parent_list,
-                "child": child_list,
-                "in_degree": in_degree_list,
-                "out_degree": out_degree_list, 
+                "edges": edge_list,
+                "degree": degree_list, 
                 "label": particle}
         
             graphs.append(graph)
@@ -1010,20 +1007,26 @@ class Step2PointGraph(DataModule):
             for part in unique_parts:
 
                 files_for_part = [f for f in source_files if int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) == part]
-                df_part = data.copy()                
-                df_part = [g for g in df_part if g["source_file"] in files_for_part]
-                filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.pkl")
+                g_part = data.copy()                
+                g_part = [g for g in g_part if g["source_file"] in files_for_part]
+                filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.npz")
 
-                with open(filepath, "wb") as f:
-                    pickle.dump(df_part, f)
-
+                np.savez(
+                    filepath,
+                    features=np.array([g["features"] for g in g_part], dtype=object),
+                    nodes=np.array([g["nodes"] for g in g_part], dtype=object),
+                    edges=np.array([g["edges"] for g in g_part], dtype=object),
+                    degree=np.array([g["degree"] for g in g_part], dtype=object),
+                    labels=np.array([g["label"] for g in g_part], dtype=object),
+                    event_ids=np.array([g["event_id"] for g in g_part])
+                    )
             print("Finished saving data")
 
 
     def _load_dataset(self):
             for split in self.datasets:
 
-                pattern = os.path.join(self.data_dir, f"{self.name}_{split}_*.pkl")
+                pattern = os.path.join(self.data_dir, f"{self.name}_{split}_*.npz")
                 file_paths = sorted(glob.glob(pattern))
 
                 if self.parts:
@@ -1037,11 +1040,30 @@ class Step2PointGraph(DataModule):
                 graphs = []
 
                 for file_path in file_paths:
-                    with open(file_path, "rb") as f:
-                        dataset = pickle.load(f)
-                    
-                    graphs.extend(dataset)
-                
+
+                    data = np.load(file_path, allow_pickle=True)
+
+                    features_arr = data["features"]
+                    nodes_arr = data["nodes"]
+                    edges_arr = data["edges"]
+                    degree_arr = data["degree"]
+                    labels_arr = data["labels"]
+                    event_ids_arr = data["event_ids"]
+
+
+                    # reconstruct list of dicts
+                    for i in range(len(event_ids_arr)):
+                        graph = {
+                            "event_id": event_ids_arr[i],
+                            "node": nodes_arr[i],
+                            "features": features_arr[i],
+                            "edges": edges_arr[i],
+                            "degree": degree_arr[i],
+                            "label": labels_arr[i]
+                        }
+                        graphs.append(graph)
+
+
                 self.datasets[split] = graphs
             
             print("Finished loading datasets")
