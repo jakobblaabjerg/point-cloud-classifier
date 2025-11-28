@@ -8,6 +8,7 @@ import joblib
 import glob
 import pickle
 
+from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
@@ -134,7 +135,9 @@ class DataModule():
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         self.scaler = scaler
-        joblib.dump(scaler, os.path.join(self.data_dir, f"{self.name}_scaler.pkl"))        
+        save_dir = os.path.join(self.data_dir, self.name)
+        os.makedirs(save_dir, exist_ok=True)
+        joblib.dump(scaler, os.path.join(save_dir, f"{self.name}_scaler.pkl"))        
 
         # transform val and test
         X_val_scaled = scaler.transform(X_val)
@@ -276,7 +279,9 @@ class Step2PointTabular(DataModule):
         for split in self.datasets:
             data = self.datasets[split]
             print(f"Saving {split} dataset")
-            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
+            save_dir = os.path.join(self.data_dir, self.name, split)
+            os.makedirs(save_dir, exist_ok=True)
+            filepath = os.path.join(save_dir, f"{self.name}_{split}.npz")
             np.savez(
                 filepath,
                 event_id = data["event_id"].to_numpy(),
@@ -290,7 +295,8 @@ class Step2PointTabular(DataModule):
 
     def _load_dataset(self):
         for split in self.datasets:
-            filepath = os.path.join(self.data_dir, f"{self.name}_{split}.npz")
+            save_dir = os.path.join(self.data_dir, self.name, split)
+            filepath = os.path.join(save_dir, f"{self.name}_{split}.npz")
             if not os.path.exists(filepath):
                 raise FileNotFoundError(f"Required file is missing: {filepath}")
 
@@ -360,8 +366,6 @@ class Step2PointTabular(DataModule):
         )
 
         return train_df, val_df, test_df
-
-
 
 
 class Step2PointPointCloud(DataModule):
@@ -489,9 +493,15 @@ class Step2PointPointCloud(DataModule):
         return df
 
 
+
+            
+
     def _save_datasets(self):
 
         for split in self.datasets:
+
+            save_dir = os.path.join(self.data_dir, self.name, split)
+            os.makedirs(save_dir, exist_ok=True)
 
             data = self.datasets[split]
             source_files = data["source_file"].unique()
@@ -505,7 +515,7 @@ class Step2PointPointCloud(DataModule):
                 files_for_part = [f for f in source_files if int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) == part]
                 df_part = data.copy()                
                 df_part = df_part[df_part["source_file"].isin(files_for_part)]
-                filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.npz")
+                filepath = os.path.join(save_dir, f"{self.name}_{split}_{part}.npz")
                 np.savez(
                     filepath,
                     event_id = df_part["event_id"].to_numpy(),
@@ -522,7 +532,9 @@ class Step2PointPointCloud(DataModule):
     def _load_dataset(self):
         for split in self.datasets:
 
-            pattern = os.path.join(self.data_dir, f"{self.name}_{split}_*.npz")
+            save_dir = os.path.join(self.data_dir, self.name, split)
+
+            pattern = os.path.join(save_dir, f"{self.name}_{split}_*.npz")
             file_paths = sorted(glob.glob(pattern))
 
             if self.parts:
@@ -600,9 +612,6 @@ class Step2PointPointCloud(DataModule):
         return x, mask, labels
 
 
-
-
-
 class Step2PointGraph(DataModule):
     
     def __init__(self, 
@@ -610,164 +619,151 @@ class Step2PointGraph(DataModule):
                  parts=None,
                  **kwargs):
         super().__init__(data_dir=data_dir, **kwargs)        
+
         self.name = "S2PG"
-
         self.parts = parts
-
-        # node features
-        # for batch of B graphs: shape (total nodes in batch, number of node features) with particle index
-        # all nodes from each graph are stacked together
-
-        # adjacency list:
-        # shape (total nodes in batch, max degree)
-        
-        # degree list 
-        # shape (total nodes in batch)
-        # 
-
-        # graph member ship
-        # shape (total nodes in batch)
-        # each node indicate its membership
 
         if self.create_dataset:
             print("Creating Step2PointGraph (S2PG) dataset")
             self._create_dataset()
-        else:
-            self._load_dataset()
-
-
-       
 
     def _preprocess_data(self, data, particle):
         
         df_steps = pd.DataFrame({
             "event_id": data["event_id"],
             "energy": data["energy"],
-            "position_x": data["position"][:, 0],
-            "position_y": data["position"][:, 1],
-            "position_z": data["position"][:, 2],
+            "pos_x": data["position"][:, 0],
+            "pos_y": data["position"][:, 1],
+            "pos_z": data["position"][:, 2],
             "time": data["time"],
-            "particle_id": data["mcparticle_id"]
+            "pid": data["mcparticle_id"]
         })
 
         df_particles = pd.DataFrame({
             "event_id": data["particle_event_id"],
-            "particle_id": data["particle_id"],
-            "parent_particle_id": data["parent_id"]
+            "pid": data["particle_id"],
+            "parent_pid": data["parent_id"]
         })
 
-
-        df_steps = df_steps.sort_values(["event_id", "particle_id", "time"]).reset_index(drop=True)
-        df_steps["unique_key"] = df_steps.groupby("event_id").cumcount()
-
-        
+        # create unique key for each step based on particle id and time.
+        df_steps = df_steps.sort_values(["event_id", "pid", "time"]).reset_index(drop=True)
+        df_steps["step_key"] = df_steps.groupby("event_id").cumcount()
+      
         df_steps_grouped = df_steps.groupby("event_id")
         df_particles_grouped = df_particles.groupby("event_id")
     
         graphs = []
         event_ids = df_steps["event_id"].unique()
 
-        for event in event_ids:          
-            print("Event:", event)
+        for event in tqdm(event_ids, desc="Processing events", leave=True):
+
+            if event == 10:
+                break
 
             df_steps_event = df_steps_grouped.get_group(event).copy()
             df_particles_event = df_particles_grouped.get_group(event).copy()
 
-            incident_series = df_particles_event.loc[df_particles_event["parent_particle_id"] == -1, "particle_id"]
+            # find incident particle (has parent -1)
+            incident_series = df_particles_event.loc[df_particles_event["parent_pid"] == -1, "pid"]
+            incident_pid = int(incident_series.iloc[0]) 
+            incident_step_key = df_steps_event["step_key"].max()+1
+            
+            # sanity check
             assert len(incident_series) == 1, f"Event {event}: expected 1 primary particle, found {len(incident_series)}"
             assert incident_series.iloc[0] == 0, f"Event {event}: primary particle ID is not 0"
-            incident_id = int(incident_series.iloc[0]) 
-            incident_key = df_steps_event["unique_key"].max()+1
 
+            # create extra step to ensure graph is connected.
             incident_step = {
                 "event_id": event,
                 "energy": 0.0,            
-                "position_x": 0.0,
-                "position_y": 0.0,
-                "position_z": 0.0,
+                "pos_x": 0.0,
+                "pos_y": 0.0,
+                "pos_z": 0.0,
                 "time": 0.0,
-                "particle_id": incident_id,
-                "unique_key": incident_key  
+                "pid": incident_pid,
+                "step_key": incident_step_key  
             }
-
             df_steps_event = pd.concat([df_steps_event, pd.DataFrame([incident_step])], ignore_index=True)
 
+            # convert to numpy arrays
             step_data_event = {
-                "particle_id": df_steps_event["particle_id"].to_numpy(),
-                "time": df_steps_event["time"].to_numpy(),
-                "energy": df_steps_event["energy"].to_numpy(),
-                "pos_x": df_steps_event["position_x"].to_numpy(),
-                "pos_y": df_steps_event["position_y"].to_numpy(),
-                "pos_z": df_steps_event["position_z"].to_numpy(),
-                "unique_key": df_steps_event["unique_key"].to_numpy()
-            }
+                "pid":          df_steps_event["pid"].to_numpy(),
+                "time":         df_steps_event["time"].to_numpy(),
+                "energy":       df_steps_event["energy"].to_numpy(),
+                "pos_x":        df_steps_event["pos_x"].to_numpy(),
+                "pos_y":        df_steps_event["pos_y"].to_numpy(),
+                "pos_z":        df_steps_event["pos_z"].to_numpy(),
+                "step_key":     df_steps_event["step_key"].to_numpy()
+                }
 
-
-            unique_particle_ids, inverse_idx = np.unique(step_data_event["particle_id"], return_inverse=True)
-            indices_by_particle = {}
-            for particle_id, grp_index in zip(unique_particle_ids, np.arange(len(unique_particle_ids))):    
+            # create inverse index map for pid into step data event 
+            unique_pids, inverse_idx = np.unique(step_data_event["pid"], return_inverse=True)
+            indices_map = {}
+            for pid, grp_index in zip(unique_pids, np.arange(len(unique_pids))):    
                 indices = np.nonzero(inverse_idx == grp_index)[0]
-                indices_by_particle[int(particle_id)] = indices  # indices into df_steps_event
+                indices_map[int(pid)] = indices 
 
-
-            parent_map = {}  # child -> list of parent particle ids (empty list if none)
+            # create map for each child to its parents pids (empty list if none) 
+            parent_map = {}  
             for _, row in df_particles_event.iterrows():
-                child = int(row["particle_id"])
-                parent = int(row["parent_particle_id"])
+                child = int(row["pid"])
+                parent = int(row["parent_pid"])
+
                 if child not in parent_map:
                     parent_map[child] = []
                 if parent != -1:
                     parent_map[child].append(parent)
 
-
-            links = self._find_links(unique_particle_ids, parent_map, step_data_event, indices_by_particle)
+            # find links between particles 
+            links = Step2PointGraph._find_links(unique_pids, 
+                                                parent_map, 
+                                                step_data_event, 
+                                                indices_map
+                                                )
             
-            edge_list = [[] for _ in range(incident_key+1)]
-            parent_list = [[] for _ in range(incident_key+1)]
+            # sanity check 
+            assert len(step_data_event["pos_x"]) == incident_step_key+1
 
-            assert len(step_data_event["pos_x"]) == len(edge_list)
+            edges = []
+            degrees = [0]*(incident_step_key+1)
+            in_degrees = [0]*(incident_step_key+1)
 
+            for source, target in links:
 
-            for parent, child in links:
-                edge_list[child].append(parent)
-                edge_list[parent].append(child)
-                parent_list[child].append(parent)
+                edges.append([source, target])
+                edges.append([target, source])
 
-            degree_list = [len(x) for x in edge_list]
-            in_degree_list = [len(x) for x in parent_list]
+                degrees[source]+=1
+                degrees[target]+=1
+                in_degrees[target]+=1
 
-            feature_list = np.stack([
-                step_data_event["energy"]/sum(step_data_event["energy"]),
+            # sanity check 
+            assert in_degrees[incident_step_key] == 0, "Incident particle has parents, which should not happen"
+            unconnected_nodes = [k for k, deg in enumerate(in_degrees[:-1]) if deg == 0]
+            assert len(unconnected_nodes) == 0, f"{len(unconnected_nodes)} nodes with no parents found"
+
+            total_energy = sum(step_data_event["energy"])
+
+            features = np.stack([
+                step_data_event["energy"]/total_energy,
                 step_data_event["pos_x"],
                 step_data_event["pos_y"],
                 step_data_event["pos_z"]
             ], axis=1)
             
+            label_map = {"proton": 0, "piM": 1}
+            label = label_map[particle]
+
             graph = {
                 "event_id": event,
-                "nodes": step_data_event["unique_key"],
-                "features": feature_list, 
-                "edges": edge_list,
-                "degree": degree_list, 
-                "label": particle}
+                "nodes": step_data_event["step_key"],
+                "features": features, 
+                "edges": np.array(edges),
+                "degrees": np.array(degrees), 
+                "label": label}
         
             graphs.append(graph)
 
-            if in_degree_list[incident_key] != 0:
-                # print(incident_key)
-                # print(in_degree_list[incident_key])
-                # print(parent_list[incident_key])
-                # print(child_list[incident_key])
-                # print(feature_list[incident_key])
-                # print(step_data_event["particle_id"][parent_list[incident_key][0]])
-                print("Incident particle has parents, which should not happen")
-
-
-            unconnected_keys = [k for k, deg in enumerate(in_degree_list[:-1]) if deg == 0]
-
-            if len(unconnected_keys) > 0:
-                print(f"{len(unconnected_keys)} nodes with no parents found")
-   
         # remap event_id
         for new_id, g in enumerate(graphs):
             g["event_id"] = new_id
@@ -775,79 +771,84 @@ class Step2PointGraph(DataModule):
         return graphs 
 
 
+    @staticmethod
+    def _find_links(unique_pids, parent_map, step_data_event, indices_map):
 
-
-
-    def _find_links(self, unique_particle_ids, parent_map, step_data_event, indices_by_particle):
-
-        ancestor_steps_cache = {}
-        step_times = step_data_event["time"]
-        step_unique_key = step_data_event["unique_key"]
+        ancestor_cache = {}
+        time_event = step_data_event["time"]
+        step_key_event = step_data_event["step_key"]
 
         links_time = [] 
         links_parent = [] 
 
-        for child_id in unique_particle_ids:
-
-            
-            child_idxs = indices_by_particle.get(child_id)
-            child_idxs_sorted = child_idxs[np.argsort(step_times[child_idxs])]
+        for child_pid in unique_pids:
+          
+            child_idxs = indices_map.get(child_pid)
+            child_idxs_sorted = child_idxs[np.argsort(time_event[child_idxs])]
             n_steps = len(child_idxs)
 
             if n_steps > 1:
                 for i in range(n_steps-1):
                     parent_idx = child_idxs_sorted[i]
-                    k_parent = step_unique_key[parent_idx]
+                    step_key_parent = step_key_event[parent_idx]
+
                     child_idx = child_idxs_sorted[i+1]
-                    k_child = step_unique_key[child_idx]
-                    links_time.append((k_parent, k_child))
+                    step_key_child = step_key_event[child_idx]
+                    
+                    links_time.append((step_key_parent, step_key_child))
 
 
 
-            parent_ids = self.get_ancestor_steps(child_id, unique_particle_ids, parent_map, ancestor_steps_cache)
-            if len(parent_ids) == 0:
-                print(f"No parents exist for particle {child_id}")
+
+            parent_pids = Step2PointGraph._get_ancestor_pids(
+                child_pid, 
+                unique_pids, 
+                parent_map, 
+                ancestor_cache
+                )
+            
+            if len(parent_pids) == 0:
+                
+                if child_pid != 0:
+                    print(f"No parents exist for particle {child_pid}")
+
                 continue
             
-            child_times = step_times[child_idxs]
+            child_times = time_event[child_idxs]
             min_time = np.min(child_times)
             min_time_idx_all = np.where(child_times==min_time)[0]                
             child_idx_all = child_idxs[min_time_idx_all]   # idx in steps
-            child_keys = step_unique_key[child_idx_all]
+            step_keys_child = step_key_event[child_idx_all]
 
+            for parent_pid in parent_pids:
 
-            for parent_id in parent_ids:
-
-                candidate_idxs = indices_by_particle.get(parent_id)
-                candidate_times = step_times[candidate_idxs]
+                candidate_idxs = indices_map.get(parent_pid)
+                candidate_times = time_event[candidate_idxs]
                 candidate_delta_times = abs(candidate_times-min_time)
                 min_delta_time = np.min(candidate_delta_times)
                 min_delta_time_idx_all = np.where(candidate_delta_times==min_delta_time)[0]                  
                 parent_idx_all = candidate_idxs[min_delta_time_idx_all] # idx in steps
-                parent_keys = step_unique_key[parent_idx_all]
+                step_keys_parent = step_key_event[parent_idx_all]
                 
-                for k_child in child_keys:
-                    for k_parent in parent_keys:
-                        links_parent.append((k_parent, k_child))
+                for key_child in step_keys_child:
+                    for key_parent in step_keys_parent:
+                        links_parent.append((key_parent, key_child))
 
         links = links_time + links_parent
         return links 
             
+    @staticmethod
+    def _get_ancestor_pids(pid, unique_pids, parent_map, cache):
 
-    def get_ancestor_steps(self, particle_id, unique_particle_ids, parent_map, cache):
-
-        """Return indices (into df_steps_event) for pid or nearest ancestor with steps.
-            caches results per particle id."""
-
+        """Return pids of nearest ancestor caches results per particle id."""
 
         # if particle ancestor already exist in cache.
-        if particle_id in cache:
-            return cache[particle_id]  
+        if pid in cache:
+            return cache[pid]  
         
         collected = []
         visited = set()
-        queue = parent_map.get(particle_id, []).copy()
-
+        queue = parent_map.get(pid, []).copy()
 
         while queue:
 
@@ -858,7 +859,7 @@ class Step2PointGraph(DataModule):
                 continue
             visited.add(cur)    
 
-            if cur not in unique_particle_ids:
+            if cur not in unique_pids:
                 
                 # look in cache 
                 if cur in cache:
@@ -876,10 +877,8 @@ class Step2PointGraph(DataModule):
                         cache[child] = [cur]
 
         if collected:
-            cache[particle_id] = collected
+            cache[pid] = collected
         return collected
-
-
 
 
     def _split_dataset(self, dataset):
@@ -973,7 +972,9 @@ class Step2PointGraph(DataModule):
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         self.scaler = scaler
-        joblib.dump(scaler, os.path.join(self.data_dir, f"{self.name}_scaler.pkl"))        
+        save_dir = os.path.join(self.data_dir, self.name)
+        os.makedirs(save_dir, exist_ok=True)
+        joblib.dump(scaler, os.path.join(save_dir, f"{self.name}_scaler.pkl"))        
 
         # transform val and test
         X_val_scaled = scaler.transform(X_val)
@@ -983,7 +984,7 @@ class Step2PointGraph(DataModule):
         self.write_back(self.datasets["val"],   X_val_scaled)
         self.write_back(self.datasets["test"],  X_test_scaled)
 
-
+    # static
     def write_back(self, graphs, X_scaled):
         start = 0
         for g in graphs:
@@ -1000,136 +1001,172 @@ class Step2PointGraph(DataModule):
             source_files = [g["source_file"] for g in data]
             source_files = set(source_files)
             print(f"Saving {split} dataset")
-            
-            parts = [int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) for f in source_files]
-            unique_parts = set(parts)
+            save_dir = os.path.join(self.data_dir, self.name, split)
+            os.makedirs(save_dir, exist_ok=True)
 
-            for part in unique_parts:
-
-                files_for_part = [f for f in source_files if int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", "")) == part]
-                g_part = data.copy()                
-                g_part = [g for g in g_part if g["source_file"] in files_for_part]
-                filepath = os.path.join(self.data_dir, f"{self.name}_{split}_{part}.npz")
-
+            for i, g in enumerate(data):
+                filepath = os.path.join(save_dir, f"graph_{i:05d}.npz")
                 np.savez(
                     filepath,
-                    features=np.array([g["features"] for g in g_part], dtype=object),
-                    nodes=np.array([g["nodes"] for g in g_part], dtype=object),
-                    edges=np.array([g["edges"] for g in g_part], dtype=object),
-                    degree=np.array([g["degree"] for g in g_part], dtype=object),
-                    labels=np.array([g["label"] for g in g_part], dtype=object),
-                    event_ids=np.array([g["event_id"] for g in g_part])
+                    features=g["features"],     # [n_steps ,F]
+                    nodes=g["nodes"],           # [n_steps] 
+                    edges=g["edges"],           # [n_edges, 2]
+                    degrees=g["degrees"],        # [n_steps]
+                    label=g["label"],
+                    event_id=g["event_id"]
                     )
             print("Finished saving data")
 
 
     def _load_dataset(self):
-            for split in self.datasets:
 
-                pattern = os.path.join(self.data_dir, f"{self.name}_{split}_*.npz")
-                file_paths = sorted(glob.glob(pattern))
+        for split in self.datasets:
 
-                if self.parts:
-                    file_paths = file_paths[:self.parts]
-
-                if len(file_paths) == 0:
-                    raise FileNotFoundError(f"No files found for pattern: {pattern}")
-
-                print(f"Loading {split} dataset from {len(file_paths)} files")
-
-                graphs = []
-
-                for file_path in file_paths:
-
-                    data = np.load(file_path, allow_pickle=True)
-
-                    features_arr = data["features"]
-                    nodes_arr = data["nodes"]
-                    edges_arr = data["edges"]
-                    degree_arr = data["degree"]
-                    labels_arr = data["labels"]
-                    event_ids_arr = data["event_ids"]
+            save_dir = os.path.join(self.data_dir, self.name, split)
+            pattern = os.path.join(save_dir, f"graph_*.npz")
+            file_paths = sorted(glob.glob(pattern))
 
 
-                    # reconstruct list of dicts
-                    for i in range(len(event_ids_arr)):
-                        graph = {
-                            "event_id": event_ids_arr[i],
-                            "node": nodes_arr[i],
-                            "features": features_arr[i],
-                            "edges": edges_arr[i],
-                            "degree": degree_arr[i],
-                            "label": labels_arr[i]
-                        }
-                        graphs.append(graph)
+            if len(file_paths) == 0:
+                raise FileNotFoundError(f"No files found for pattern: {pattern}")
 
+            print(f"Loading {split} dataset from {len(file_paths)} files")
 
-                self.datasets[split] = graphs
+            graphs = []
+
+            for file_path in file_paths:
+
+                data = np.load(file_path, allow_pickle=True)
+
+                features = data["features"]
+                nodes = data["nodes"]
+                edges = data["edges"]
+                degrees = data["degrees"]
+                label = data["label"]
+                event_id = data["event_id"]
+
+                g = {
+                    "event_id": event_id,
+                    "nodes": nodes,
+                    "features": features, 
+                    "edges": edges,
+                    "degrees": degrees, 
+                    "label": label
+                    }
             
-            print("Finished loading datasets")
+                graphs.append(g)
+            
+            self.datasets[split] = graphs
+        print("Finished loading datasets")
 
 
-    # def _wrap_dataset(self, split):
+    def _wrap_dataset(self, split):
         
-    #     # wrap pandas dataframe into pytorch dataset
-    #     df = self.datasets[split]
-    #     features_df = 1
-    #     adjacency_df = 1
-    #     class _DatasetWrapper(torch.utils.data.Dataset):
+        data_dir = os.path.join(self.data_dir, self.name, split)
+
+        # wrap pandas dataframe into pytorch dataset
+        class _DatasetWrapper(torch.utils.data.Dataset):
             
-    #         def __init__(self, df):
-
-    #             self.df = df
-    #             self.event_ids = df["event_id"].unique()
-
-
-    #             self.features = features_df.groupby("event_id")
-    #             self.adjacency = adjacency_df.groupby("event_id")
+            def __init__(self):
+                
+                self.files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+                if len(self.files) == 0:
+                    raise FileNotFoundError(f"No .npz files found in {data_dir}")
 
 
-    #             self.feature_cols = [col for col in self.df.columns if col not in ["label", "event_id"]]
-
-    #         def __len__(self):
-    #             return len(self.event_ids)
+            def __len__(self):
+                return len(self.files)
             
-    #         def __getitem__(self, idx):
-
-    #             event_id = self.event_ids[idx]
-                
-                
-    #             feature_data = self.features.get_group(event_id) 
-    #             adjacency_data = self.adjacency.get_group(event_id)                
-
-    #             membership_data = 
-                
-
-    #             # both time index and particle index
-                
+            def __getitem__(self, idx):
+                data = np.load(self.files[idx], allow_pickle=True)
 
 
 
-
-    #             features = torch.tensor(event_data[self.feature_cols].values, dtype=torch.float32)
-    #             label  = torch.tensor(event_data["label"].iloc[0], dtype=torch.float32).unsqueeze(0)
-    #             return features, label
-       
-    #     return _DatasetWrapper(df)
-
-
+                graph = {
+                    "nodes": torch.as_tensor(np.array(data["nodes"].tolist(), dtype=np.float32)),
+                    "features": torch.as_tensor(np.array(data["features"].tolist(), dtype=np.float32)),
+                    "edges": data["edges"], #torch.as_tensor(np.array(data["edges"], dtype=np.int64), dtype=torch.long),  # keep as list of lists
+                    "degree": torch.as_tensor(np.array(data["degree"].tolist(), dtype=np.int64)),
+                }
 
 
+                #remove again when handled i data creation
+                label_map = {"proton": 0, "piM": 1}
+                raw_label = data["label"].item()
+                label = torch.tensor(label_map[raw_label], dtype=torch.float32)
+
+                return graph, label
+
+        return _DatasetWrapper()
+
+
+    def get_train_loader(self):
+        return DataLoader(
+            self._wrap_dataset("train"), 
+            batch_size=self.batch_size,
+            shuffle=True,
+            collate_fn=self._graph_collate
+        )
+
+    def get_val_loader(self):
+        return DataLoader(
+            self._wrap_dataset("val"), 
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self._graph_collate
+        )
+
+    def get_test_loader(self):
+        return DataLoader(
+            self._wrap_dataset("test"), 
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self._graph_collate
+        )
 
 
 
+    def _graph_collate(self, batch):
 
-    #     if df.isna().any().any():
-    #         print("There are NaN values in the dataset!")
-    #     else:
-    #         print("No NaN values detected.")
-        
-    #     return df
+        node_features = []
+        batch_ptr = []
+        labels = []
+        start_index = 0 
+        all_edges = []
+        all_degree = []
 
+        for idx, (g, label) in enumerate(batch):
 
+            features = g["features"]
+            node_features.append(features)
+
+            n = features.shape[0] # total steps in event
+            batch_ptr.append(torch.full((n,), idx))
+            labels.append(label)
+
+            edges = []
+            for local_idx, targets in enumerate(g["edges"]):
+
+                targets = np.array(targets, dtype=np.int64) + start_index
+                if len(targets)==0:
+                    print("hej")
+                source = np.full_like(targets, start_index+local_idx)  # source node index
+                edges.append(np.stack([source, targets], axis=1))  # shape (num_edges, 2)
+            if edges:
+                edges = np.concatenate(edges, axis=0)  # flatten all edges for this graph
+                all_edges.append(edges)
+
+            all_degree.append(g["degree"].clone())
+            start_index += n
+
+        node_features = torch.cat(node_features, dim=0)
+        batch_ptr = torch.cat(batch_ptr, dim=0)
+        labels = torch.stack(labels).unsqueeze(1) 
+        all_edges = np.concatenate(all_edges, axis=0)
+        all_edges = torch.as_tensor(all_edges, dtype=torch.long)
+        all_degree = torch.cat(all_degree, dim=0)
+
+        return node_features, batch_ptr, all_degree, all_edges, labels
 
 
 
