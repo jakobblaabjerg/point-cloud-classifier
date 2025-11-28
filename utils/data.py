@@ -1006,7 +1006,6 @@ class Step2PointGraph(DataModule):
                 np.savez(
                     filepath,
                     features=g["features"],     # [n_steps ,F]
-                    nodes=g["nodes"],           # [n_steps] 
                     edges=g["edges"],           # [n_edges, 2]
                     degrees=g["degrees"],        # [n_steps]
                     label=g["label"],
@@ -1033,10 +1032,9 @@ class Step2PointGraph(DataModule):
 
             for file_path in file_paths:
 
-                data = np.load(file_path, allow_pickle=True)
+                data = np.load(file_path)
 
                 features = data["features"]
-                nodes = data["nodes"]
                 edges = data["edges"]
                 degrees = data["degrees"]
                 label = data["label"]
