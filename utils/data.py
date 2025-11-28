@@ -746,7 +746,7 @@ class Step2PointGraph(DataModule):
                 step_data_event["pos_x"],
                 step_data_event["pos_y"],
                 step_data_event["pos_z"]
-            ], axis=1)
+            ], axis=1).astype(np.float32)
             
             label_map = {"proton": 0, "piM": 1}
             label = label_map[particle]
@@ -755,8 +755,8 @@ class Step2PointGraph(DataModule):
                 "event_id": event,
                 "nodes": step_data_event["step_key"],
                 "features": features, 
-                "edges": np.array(edges),
-                "degrees": np.array(degrees), 
+                "edges": np.array(edges, dtype=np.int64),
+                "degrees": np.array(degrees, dtype=np.int64), 
                 "label": label}
         
             graphs.append(graph)
@@ -1042,7 +1042,6 @@ class Step2PointGraph(DataModule):
 
                 g = {
                     "event_id": event_id,
-                    "nodes": nodes,
                     "features": features, 
                     "edges": edges,
                     "degrees": degrees, 
@@ -1068,27 +1067,22 @@ class Step2PointGraph(DataModule):
                 if len(self.files) == 0:
                     raise FileNotFoundError(f"No .npz files found in {data_dir}")
 
-
             def __len__(self):
                 return len(self.files)
             
             def __getitem__(self, idx):
-                data = np.load(self.files[idx], allow_pickle=True)
+                data = np.load(self.files[idx])
 
-
+                label = torch.tensor(data["label"], dtype=torch.float32)
+                features = torch.from_numpy(data["features"])
+                edges = torch.from_numpy(data["edges"])
+                degrees = torch.from_numpy(data["degrees"])
 
                 graph = {
-                    "nodes": torch.as_tensor(np.array(data["nodes"].tolist(), dtype=np.float32)),
-                    "features": torch.as_tensor(np.array(data["features"].tolist(), dtype=np.float32)),
-                    "edges": data["edges"], #torch.as_tensor(np.array(data["edges"], dtype=np.int64), dtype=torch.long),  # keep as list of lists
-                    "degree": torch.as_tensor(np.array(data["degree"].tolist(), dtype=np.int64)),
+                    "features": features,
+                    "edges": edges,
+                    "degrees": degrees
                 }
-
-
-                #remove again when handled i data creation
-                label_map = {"proton": 0, "piM": 1}
-                raw_label = data["label"].item()
-                label = torch.tensor(label_map[raw_label], dtype=torch.float32)
 
                 return graph, label
 
@@ -1119,49 +1113,37 @@ class Step2PointGraph(DataModule):
             collate_fn=self._graph_collate
         )
 
-
-
     def _graph_collate(self, batch):
 
-        node_features = []
+        batch_X = []
+        batch_y = []
+        batch_edges = []
+        batch_deg = []
         batch_ptr = []
-        labels = []
-        start_index = 0 
-        all_edges = []
-        all_degree = []
+        offset = 0
 
-        for idx, (g, label) in enumerate(batch):
+        for idx, (graph, label) in enumerate(batch):
 
-            features = g["features"]
-            node_features.append(features)
+            features = graph["features"]
+            degrees = graph["degrees"]
+            edges = (graph["edges"]+offset)
+            n_steps = features.shape[0] 
 
-            n = features.shape[0] # total steps in event
-            batch_ptr.append(torch.full((n,), idx))
-            labels.append(label)
+            batch_X.append(features)
+            batch_y.append(label)
+            batch_deg.append(degrees)
+            batch_edges.append(edges)
+            batch_ptr.append(torch.full((n_steps,), idx))
 
-            edges = []
-            for local_idx, targets in enumerate(g["edges"]):
+            offset += n_steps
 
-                targets = np.array(targets, dtype=np.int64) + start_index
-                if len(targets)==0:
-                    print("hej")
-                source = np.full_like(targets, start_index+local_idx)  # source node index
-                edges.append(np.stack([source, targets], axis=1))  # shape (num_edges, 2)
-            if edges:
-                edges = np.concatenate(edges, axis=0)  # flatten all edges for this graph
-                all_edges.append(edges)
-
-            all_degree.append(g["degree"].clone())
-            start_index += n
-
-        node_features = torch.cat(node_features, dim=0)
+        batch_X = torch.cat(batch_X, dim=0)
+        batch_y = torch.stack(batch_y).unsqueeze(1)
+        batch_edges = torch.cat(batch_edges, dim=0)
+        batch_deg = torch.cat(batch_deg, dim=0)
         batch_ptr = torch.cat(batch_ptr, dim=0)
-        labels = torch.stack(labels).unsqueeze(1) 
-        all_edges = np.concatenate(all_edges, axis=0)
-        all_edges = torch.as_tensor(all_edges, dtype=torch.long)
-        all_degree = torch.cat(all_degree, dim=0)
 
-        return node_features, batch_ptr, all_degree, all_edges, labels
+        return batch_X, batch_edges, batch_deg, batch_ptr, batch_y
 
 
 
@@ -1169,3 +1151,7 @@ if __name__ == "__main__":
 
     data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
     Step2PointGraph(data_dir=data_dir, create_dataset=True)
+
+
+
+    
