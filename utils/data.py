@@ -657,9 +657,6 @@ class Step2PointGraph(DataModule):
 
         for event in tqdm(event_ids, desc="Processing events", leave=True):
 
-            if event == 10:
-                break
-
             df_steps_event = df_steps_grouped.get_group(event).copy()
             df_particles_event = df_particles_grouped.get_group(event).copy()
 
