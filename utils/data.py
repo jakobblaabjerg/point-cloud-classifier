@@ -616,12 +616,16 @@ class Step2PointGraph(DataModule):
     
     def __init__(self, 
                  data_dir,
+                 n_features=4,
                  parts=None,
+                 use_weights=True,
                  **kwargs):
         super().__init__(data_dir=data_dir, **kwargs)        
 
         self.name = "S2PG"
         self.parts = parts
+        self.use_weights = use_weights
+        self.n_features = n_features
 
         if self.create_dataset:
             print("Creating Step2PointGraph (S2PG) dataset")
@@ -711,8 +715,8 @@ class Step2PointGraph(DataModule):
                 if parent != -1:
                     parent_map[child].append(parent)
 
-            # find links between particles 
-            links = Step2PointGraph._find_links(unique_pids, 
+            # find edges between nodes (particles) 
+            edges = Step2PointGraph._find_edges(unique_pids, 
                                                 parent_map, 
                                                 step_data_event, 
                                                 indices_map
@@ -720,24 +724,6 @@ class Step2PointGraph(DataModule):
             
             # sanity check 
             assert len(step_data_event["pos_x"]) == incident_step_key+1
-
-            edges = []
-            degrees = [0]*(incident_step_key+1)
-            in_degrees = [0]*(incident_step_key+1)
-
-            for source, target in links:
-
-                edges.append([source, target])
-                edges.append([target, source])
-
-                degrees[source]+=1
-                degrees[target]+=1
-                in_degrees[target]+=1
-
-            # sanity check 
-            assert in_degrees[incident_step_key] == 0, "Incident particle has parents, which should not happen"
-            unconnected_nodes = [k for k, deg in enumerate(in_degrees[:-1]) if deg == 0]
-            assert len(unconnected_nodes) == 0, f"{len(unconnected_nodes)} nodes with no parents found"
 
             total_energy = sum(step_data_event["energy"])
 
@@ -748,15 +734,16 @@ class Step2PointGraph(DataModule):
                 step_data_event["pos_z"]
             ], axis=1).astype(np.float32)
             
+            weights = Step2PointGraph._compute_weights(features, edges)
+
             label_map = {"proton": 0, "piM": 1}
             label = label_map[particle]
 
             graph = {
                 "event_id": event,
-                "nodes": step_data_event["step_key"],
                 "features": features, 
-                "edges": np.array(edges, dtype=np.int64),
-                "degrees": np.array(degrees, dtype=np.int64), 
+                "edges": edges,
+                "weights": weights, 
                 "label": label}
         
             graphs.append(graph)
@@ -767,16 +754,27 @@ class Step2PointGraph(DataModule):
 
         return graphs 
 
+    @staticmethod
+    def _compute_weights(features, edges, eps=1e-6):
+
+        positions = features[:,1:4]
+        src_pos = positions[edges[0]]   
+        tgt_pos = positions[edges[1]]   
+        dists = np.linalg.norm(src_pos - tgt_pos, axis=1)
+        sigma = np.median(dists) + eps
+        weights = np.exp(- (dists**2) / (2 * sigma**2))
+
+        return np.array(weights, dtype=np.float32)
 
     @staticmethod
-    def _find_links(unique_pids, parent_map, step_data_event, indices_map):
+    def _find_edges(unique_pids, parent_map, step_data_event, indices_map):
 
         ancestor_cache = {}
         time_event = step_data_event["time"]
         step_key_event = step_data_event["step_key"]
 
-        links_time = [] 
-        links_parent = [] 
+        edges_time = [] 
+        edges_parent = [] 
 
         for child_pid in unique_pids:
           
@@ -787,14 +785,12 @@ class Step2PointGraph(DataModule):
             if n_steps > 1:
                 for i in range(n_steps-1):
                     parent_idx = child_idxs_sorted[i]
-                    step_key_parent = step_key_event[parent_idx]
+                    source = step_key_event[parent_idx]
 
                     child_idx = child_idxs_sorted[i+1]
-                    step_key_child = step_key_event[child_idx]
+                    target = step_key_event[child_idx]
                     
-                    links_time.append((step_key_parent, step_key_child))
-
-
+                    edges_time.append((source, target))
 
 
             parent_pids = Step2PointGraph._get_ancestor_pids(
@@ -827,13 +823,31 @@ class Step2PointGraph(DataModule):
                 parent_idx_all = candidate_idxs[min_delta_time_idx_all] # idx in steps
                 step_keys_parent = step_key_event[parent_idx_all]
                 
-                for key_child in step_keys_child:
-                    for key_parent in step_keys_parent:
-                        links_parent.append((key_parent, key_child))
+                for target in step_keys_child:
+                    for source in step_keys_parent:
+                        edges_parent.append((source, target))
 
-        links = links_time + links_parent
-        return links 
-            
+        edges = edges_time + edges_parent
+
+
+        edges_bidirectional = []
+        incident_step_key = step_key_event[-1]
+        in_degree = [0]*(incident_step_key+1)
+
+        #bidreactional
+        for source, target in edges:
+            edges_bidirectional.append([source, target])
+            edges_bidirectional.append([target, source])
+            in_degree[target]+=1
+
+        # sanity check 
+        assert in_degree[incident_step_key] == 0, "Incident particle has parents, which should not happen"
+        unconnected_nodes = [k for k, deg in enumerate(in_degree[:-1]) if deg == 0]
+        assert len(unconnected_nodes) == 0, f"{len(unconnected_nodes)} nodes with no parents found"
+
+        return np.array(edges_bidirectional, dtype=np.int64).T
+
+
     @staticmethod
     def _get_ancestor_pids(pid, unique_pids, parent_map, cache):
 
@@ -876,7 +890,6 @@ class Step2PointGraph(DataModule):
         if collected:
             cache[pid] = collected
         return collected
-
 
     def _split_dataset(self, dataset):
 
@@ -957,38 +970,47 @@ class Step2PointGraph(DataModule):
                 g.pop("source_file", None)
 
 
+    @staticmethod
+    def _scale_position(features):
+        position = features[:,1:4]
+        energy = features[:, 0:1]
+        position_mean = (position * energy).sum(axis=0) / (energy.sum() + 1e-8)
+        position_std = np.sqrt(((energy * (position - position_mean)**2).sum(axis=0)) / (energy.sum() + 1e-8))
+        position_norm = (position-position_mean)/(position_std + 1e-8)
+        features[:,1:4] = position_norm
+
+        return features
+
     def _scale_features(self):
 
         print("Scaling features")
+        X_train = np.vstack([Step2PointGraph._scale_position(g["features"]) for g in self.datasets["train"]])
+        X_val   = np.vstack([Step2PointGraph._scale_position(g["features"]) for g in self.datasets["val"]])
+        X_test  = np.vstack([Step2PointGraph._scale_position(g["features"]) for g in self.datasets["test"]])
 
-        X_train = np.vstack([g["features"] for g in self.datasets["train"]])
-        X_val   = np.vstack([g["features"] for g in self.datasets["val"]])
-        X_test  = np.vstack([g["features"] for g in self.datasets["test"]])
-
-        # fit scaler on train
         scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
+        energy_idx = 0
+        X_train[:, energy_idx:energy_idx+1] = scaler.fit_transform(X_train[:, energy_idx:energy_idx+1])
+        X_val[:, energy_idx:energy_idx+1]   = scaler.transform(X_val[:, energy_idx:energy_idx+1])
+        X_test[:, energy_idx:energy_idx+1]  = scaler.transform(X_test[:, energy_idx:energy_idx+1])
+        
         self.scaler = scaler
         save_dir = os.path.join(self.data_dir, self.name)
         os.makedirs(save_dir, exist_ok=True)
         joblib.dump(scaler, os.path.join(save_dir, f"{self.name}_scaler.pkl"))        
 
-        # transform val and test
-        X_val_scaled = scaler.transform(X_val)
-        X_test_scaled = scaler.transform(X_test)
+        Step2PointGraph._write_back(self.datasets["train"], X_train)
+        Step2PointGraph._write_back(self.datasets["val"],   X_val)
+        Step2PointGraph._write_back(self.datasets["test"],  X_test)
 
-        self.write_back(self.datasets["train"], X_train_scaled)
-        self.write_back(self.datasets["val"],   X_val_scaled)
-        self.write_back(self.datasets["test"],  X_test_scaled)
 
-    # static
-    def write_back(self, graphs, X_scaled):
+    @staticmethod
+    def _write_back(graphs, X_scaled):
         start = 0
         for g in graphs:
             n = len(g["features"])
             g["features"] = X_scaled[start:start+n]
             start += n
-
 
     def _save_datasets(self):
 
@@ -1007,12 +1029,11 @@ class Step2PointGraph(DataModule):
                     filepath,
                     features=g["features"],     # [n_steps ,F]
                     edges=g["edges"],           # [n_edges, 2]
-                    degrees=g["degrees"],        # [n_steps]
+                    weights=g["weights"],       # [n_steps]
                     label=g["label"],
                     event_id=g["event_id"]
                     )
             print("Finished saving data")
-
 
     def _load_dataset(self):
 
@@ -1036,7 +1057,7 @@ class Step2PointGraph(DataModule):
 
                 features = data["features"]
                 edges = data["edges"]
-                degrees = data["degrees"]
+                weights = data["weights"]
                 label = data["label"]
                 event_id = data["event_id"]
 
@@ -1044,7 +1065,7 @@ class Step2PointGraph(DataModule):
                     "event_id": event_id,
                     "features": features, 
                     "edges": edges,
-                    "degrees": degrees, 
+                    "weights": weights, 
                     "label": label
                     }
             
@@ -1053,16 +1074,15 @@ class Step2PointGraph(DataModule):
             self.datasets[split] = graphs
         print("Finished loading datasets")
 
-
     def _wrap_dataset(self, split):
         
         data_dir = os.path.join(self.data_dir, self.name, split)
-
+        n_features = self.n_features
+ 
         # wrap pandas dataframe into pytorch dataset
         class _DatasetWrapper(torch.utils.data.Dataset):
             
             def __init__(self):
-                
                 self.files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
                 if len(self.files) == 0:
                     raise FileNotFoundError(f"No .npz files found in {data_dir}")
@@ -1071,23 +1091,29 @@ class Step2PointGraph(DataModule):
                 return len(self.files)
             
             def __getitem__(self, idx):
+
                 data = np.load(self.files[idx])
 
                 label = torch.tensor(data["label"], dtype=torch.float32)
-                features = torch.from_numpy(data["features"])
-                edges = torch.from_numpy(data["edges"])
-                degrees = torch.from_numpy(data["degrees"])
+                
+                if n_features == 1:
+                    features = data["features"][:, 0:1]
+                elif n_features == 4:
+                    features = data["features"]
 
+                features = torch.from_numpy(features)
+                edges = torch.from_numpy(data["edges"])
+                weights = torch.from_numpy(data["weights"])
+ 
                 graph = {
                     "features": features,
                     "edges": edges,
-                    "degrees": degrees
+                    "weights": weights,
                 }
 
                 return graph, label
 
         return _DatasetWrapper()
-
 
     def get_train_loader(self):
         return DataLoader(
@@ -1115,40 +1141,42 @@ class Step2PointGraph(DataModule):
 
     def _graph_collate(self, batch):
 
-        batch_X = []
-        batch_y = []
-        batch_edges = []
-        batch_deg = []
-        batch_ptr = []
+        X_b = []
+        y_b = []
+        edges_b = []
+        weights_b = []
+        membership_b = []
         offset = 0
 
         for idx, (graph, label) in enumerate(batch):
 
             features = graph["features"]
-            degrees = graph["degrees"]
-            edges = (graph["edges"]+offset)
+            edges = graph["edges"]+offset
+            weights = graph["weights"]
             n_steps = features.shape[0] 
 
-            batch_X.append(features)
-            batch_y.append(label)
-            batch_deg.append(degrees)
-            batch_edges.append(edges)
-            batch_ptr.append(torch.full((n_steps,), idx))
-
+            X_b.append(features)
+            y_b.append(label)
+            edges_b.append(edges)
+            weights_b.append(weights)
+            membership_b.append(torch.full((n_steps,), idx))
             offset += n_steps
 
-        batch_X = torch.cat(batch_X, dim=0)
-        batch_y = torch.stack(batch_y).unsqueeze(1)
-        batch_edges = torch.cat(batch_edges, dim=0)
-        batch_deg = torch.cat(batch_deg, dim=0)
-        batch_ptr = torch.cat(batch_ptr, dim=0)
+        X_b = torch.cat(X_b, dim=0)
+        y_b = torch.stack(y_b).unsqueeze(1)
+        edges_b = torch.cat(edges_b, dim=1) ## is dim 1 right?
+        membership_b = torch.cat(membership_b, dim=0)
 
-        return batch_X, batch_edges, batch_deg, batch_ptr, batch_y
+        if self.use_weights:
+            weights_b = torch.cat(weights_b, dim=0)
+        else:
+            weights_b = None
+
+        return X_b, membership_b, edges_b, weights_b, y_b
 
 
 
 if __name__ == "__main__":
-
     data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
     Step2PointGraph(data_dir=data_dir, create_dataset=True)
 
