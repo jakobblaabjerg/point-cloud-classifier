@@ -1,0 +1,21 @@
+model:
+  input_dim: &n_features 4
+  output_dim: 1
+  hidden_dim: 128
+  activation: "tanh"
+  use_gat: false
+  gat_heads: 4
+  sag_pool: false
+  pool_ratio: 0.5
+  local_pooling: "add"
+  global_pooling: "mean"
+  deepchem_style: true
+
+dataset:
+  batch_size: 32
+  use_weights: false
+  n_features : *n_features
+
+trainer:
+  epochs: 15
+  learning_rate: 0.001 
