@@ -70,7 +70,7 @@ class GraphNet(nn.Module):
         # edges:        [2, num_edges] 
         # weights:      [num_edges,] optional
 
-        x = self.conv1(x, edges, edge_weight=weights)
+        x = self.conv1(x, edges, weights)
         
         x = self.activation(x)
         x = self.bn1(x)
@@ -79,7 +79,7 @@ class GraphNet(nn.Module):
             # use weights as edge features instead
             x, edges, weights, membership, _, _ = self.pool1(x, edges, weights, membership)
     
-        x = self.conv2(x, edges, edge_weight=weights)  
+        x = self.conv2(x, edges, weights)  
         x = self.activation(x)
         x = self.bn2(x)
 
