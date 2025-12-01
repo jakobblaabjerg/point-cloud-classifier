@@ -37,6 +37,8 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
             hp_config = graph_net_config(config=config)
         
 
+        print(hp_config)
+
         try:
 
             version_dir = train_model(
@@ -103,8 +105,28 @@ def deep_sets_config(config):
     return hp_config
 
 def graph_net_config(config):
-    pass
 
+    hp_config = deepcopy(config)
+
+    hp_config["model"]["hidden_dim"] = int(np.random.choice([64, 128, 256]))
+    hp_config["model"]["activation"] = str(np.random.choice(["gelu", "relu", "tanh"]))
+    hp_config["model"]["use_gat"] = bool(np.random.choice([True, False]))
+    hp_config["model"]["gat_heads"] = int(np.random.choice([4, 8]))
+    hp_config["model"]["sag_pool"] = bool(np.random.choice([True, False]))
+    hp_config["model"]["pool_ratio"] = float(np.random.choice([0.3, 0.4, 0.5]))
+    hp_config["model"]["local_pooling"] = str(np.random.choice(["add", "mean", "max"]))
+    hp_config["model"]["global_pooling"] = str(np.random.choice(["add", "mean", "max"]))
+    hp_config["model"]["deepchem_style"] = bool(np.random.choice([True, False]))
+    hp_config["model"]["input_dim"] = int(np.random.choice([1, 4]))
+
+    hp_config["dataset"]["use_weights"] = bool(np.random.choice([True, False]))
+    hp_config["dataset"]["batch_size"] = int(np.random.choice([16, 32, 64]))
+
+    hp_config["trainer"]["learning_rate"] = 10 ** np.random.uniform(-4, -2)    
+    hp_config["trainer"]["optimizer"] = str(np.random.choice(["adam", "adamw"]))
+
+
+    return hp_config
 
 
 def update_leaderboard(top_runs, version_dir):
@@ -160,8 +182,8 @@ def create_search_dir(search_dir):
 
 if __name__ == "__main__":
 
-    model = "deep_sets"
-    dataset = "s2ppc" 
+    model = "graph_net"
+    dataset = "s2pg" 
     search_dir = "search_runs"
 
     run_search(
