@@ -10,7 +10,7 @@ import torch
 import gc
 import json
 
-def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
+def run_search(model_name, dataset_name, search_dir: str, max_runs=2000):
 
     # to log failed runs 
     status_log = os.path.join(search_dir, "status_log.txt")
@@ -117,7 +117,11 @@ def graph_net_config(config):
     hp_config["model"]["local_pooling"] = str(np.random.choice(["add", "mean", "max"]))
     hp_config["model"]["global_pooling"] = str(np.random.choice(["add", "mean", "max"]))
     hp_config["model"]["deepchem_style"] = bool(np.random.choice([True, False]))
-    hp_config["model"]["input_dim"] = int(np.random.choice([1, 4]))
+    
+    input_dim = int(np.random.choice([1, 4]))
+    hp_config["model"]["input_dim"] = input_dim
+    hp_config["dataset"]["n_features"] = input_dim
+
 
     hp_config["dataset"]["use_weights"] = bool(np.random.choice([True, False]))
     hp_config["dataset"]["batch_size"] = int(np.random.choice([16, 32, 64]))
