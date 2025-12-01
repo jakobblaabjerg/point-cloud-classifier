@@ -43,19 +43,12 @@ class ModelWrapper:
             loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", leave=False)
             for batch in loop:
 
-                if len(batch) == 2:
-                    batch_X, batch_y = batch
-                    batch_X = batch_X.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    logits = self.model(batch_X)
+                *inputs, batch_y = batch 
+                inputs = [x.to(self.device) for x in inputs if x!=None]
+                batch_y = batch_y.to(self.device)
+                logits = self.model(*inputs)
 
-                elif len(batch) == 3:
-                    batch_X, batch_aux, batch_y = batch
-                    batch_X = batch_X.to(self.device)
-                    batch_aux = batch_aux.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    logits = self.model(batch_X, batch_aux)
-
+  
                 # print("logits:", logits[:5].detach().cpu().numpy().flatten())
                 # print("logits mean:", logits.mean().item(), "std:", logits.std().item())
                 # print("labels mean:", batch_y.mean().item())
@@ -74,12 +67,23 @@ class ModelWrapper:
                 self.optimizer.zero_grad()
                 loss = criterion(logits, batch_y)
                 loss.backward()
+
+
                 self.optimizer.step()
+
                 batch_losses.append(loss.item())
                 loop.set_postfix(loss=loss.item())
 
             epoch_loss = sum(batch_losses) / len(batch_losses)
             writer.add_scalar("Loss/train", epoch_loss, epoch)
+
+            writer.add_histogram("logits", logits.detach().cpu(), epoch)
+
+            # Log weights & grads once per epoch
+            for name, param in self.model.named_parameters():
+                writer.add_histogram(f"{name}_weight", param.detach().cpu(), epoch)
+                writer.add_histogram(f"{name}_grad", param.grad.detach().cpu(), epoch)
+
 
             # y_true_train, y_pred_train = self.predict(train_loader)
             # train_acc = (y_true_train == y_pred_train).mean()
@@ -87,13 +91,9 @@ class ModelWrapper:
 
             print("logits:", logits[:5].detach().cpu().numpy().flatten())
             print("logits mean:", logits.mean().item(), "std:", logits.std().item())
-            print("labels mean:", batch_y.mean().item())
-            print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
+            # print("labels mean:", batch_y.mean().item())
+            # print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
 
-            if len(batch) == 3:
-                # Sparse batching — check counts
-                print("aux shape:", batch_aux.shape)
-                print("aux unique:", torch.unique(batch_aux))
 
 
             if val_loader:
@@ -105,19 +105,11 @@ class ModelWrapper:
 
                 with torch.no_grad():
                     for batch in val_loader:
-
-                        if len(batch) == 2:
-                            batch_X, batch_y = batch
-                            batch_X = batch_X.to(self.device)
-                            batch_y = batch_y.to(self.device)
-                            logits = self.model(batch_X)
-
-                        elif len(batch) == 3:
-                            batch_X, batch_aux, batch_y = batch
-                            batch_X = batch_X.to(self.device)
-                            batch_aux = batch_aux.to(self.device)
-                            batch_y = batch_y.to(self.device)
-                            logits = self.model(batch_X, batch_aux)
+                        
+                        *inputs, batch_y = batch 
+                        inputs = [x.to(self.device) for x in inputs if x!=None]
+                        batch_y = batch_y.to(self.device)
+                        logits = self.model(*inputs)
 
                         loss = criterion(logits, batch_y)
                         val_losses.append(loss.item())
@@ -159,18 +151,10 @@ class ModelWrapper:
         with torch.no_grad():
             for batch in data_loader:
 
-                if len(batch) == 2:
-                    batch_X, batch_y = batch
-                    batch_X = batch_X.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    logits = self.model(batch_X)
-
-                elif len(batch) == 3:
-                    batch_X, batch_aux, batch_y = batch
-                    batch_X = batch_X.to(self.device)
-                    batch_aux = batch_aux.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    logits = self.model(batch_X, batch_aux)
+                *inputs, batch_y = batch 
+                inputs = [x.to(self.device) for x in inputs if x != None]
+                batch_y = batch_y.to(self.device)
+                logits = self.model(*inputs)
 
                 probs = torch.sigmoid(logits)
                 preds = (probs >= 0.5).float()

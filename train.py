@@ -5,11 +5,12 @@ from utils.plots import plot_confusion_matrix, plot_precision_recall_curve, plot
 from models.logistic_regression import LogRegression
 from models.fully_connected_net import FullyConnectedNet
 from models.wrapper import ModelWrapper
+from models.graph_net import GraphNet
 from models.deep_sets import DeepSets
 import numpy as np 
 import os
 import pickle
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, classification_report
 import torch
 
 
@@ -61,9 +62,22 @@ def get_model(model_name, config, model_dir=None):
         if model_dir is not None:
             model_path = os.path.join(model_dir, "model.pt")
             if not os.path.exists(model_path):
-                raise FileNotFoundError(f"FullyConnectedNet model not found at {model_path}")
+                raise FileNotFoundError(f"DeepSets model not found at {model_path}")
             model.load()
             print(f"Loaded DeepSets model from {model_path}")    
+
+
+    elif model_name == "graph_net":
+
+        model = GraphNet(**config["model"]) 
+        model = ModelWrapper(model, **config["trainer"], **config["logging"])
+
+        if model_dir is not None:
+            model_path = os.path.join(model_dir, "model.pt")
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"GraphNet model not found at {model_path}")
+            model.load()
+            print(f"Loaded GraphNet model from {model_path}")   
 
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -82,11 +96,18 @@ def evaluate_model(model_dir, save_dir):
     dataloader = get_dataloader(dataset_name=dataset_name, config=config)
     model = get_model(model_name=model_name, config=config, model_dir=model_dir)
 
-    test_loader = dataloader.get_test_data()
+    test_loader = dataloader.get_test_loader()
     y_true_test, y_pred_test = model.predict(test_loader)
 
     acc_test = accuracy_score(y_true_test, y_pred_test)
     print("accuracy/test", round(acc_test, 6))
+
+
+    classification_report(y_true_test, y_pred_test)
+    report = classification_report(y_true_test, y_pred_test)
+    report_path = os.path.join(save_dir, "classification_report.txt")
+    with open(report_path, "w") as f:
+        f.write(report)
 
     y_true_test, y_prob_test = model.predict(test_loader, return_prob=True)
     plot_confusion_matrix(y_true_test, y_pred_test, save_dir)
@@ -142,15 +163,15 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
 
 if __name__ == "__main__": 
 
-    #model = "fully_connected_net"
-    #model = "logistic_regression"
-    model = "deep_sets"
-    dataset = "s2ppc" 
+    # model = "fully_connected_net"
+    # model = "logistic_regression"
+    model = "graph_net"
+    dataset = "s2pg" 
     config = load_config("configs/base.yaml", f"configs/{model}.yaml")
     train_model(model, dataset, config, plots=True)
 
 
-    # version = 31
+    # version = 86
     # model_dir = f"log/version_{version}"
     # save_dir = f"results/version_{version}"
     # os.makedirs(save_dir, exist_ok=True)

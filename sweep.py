@@ -12,13 +12,16 @@ import json
 
 def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
 
+    # to log failed runs 
+    status_log = os.path.join(search_dir, "status_log.txt")
+
     config = load_config("configs/base.yaml", f"configs/{model_name}.yaml")
     search_dir = os.path.abspath(search_dir)
 
     create_search_dir(search_dir=search_dir)
 
     config["logging"]["log_dir"] = search_dir
-    config["trainer"]["epochs"] = 15
+    config["trainer"]["epochs"] = 10
 
     top_runs = []  
     print(f"Starting hyperparameter search ({max_runs} runs)...")
@@ -29,6 +32,10 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
             hp_config = fully_connected_net_config(config=config)
         elif model_name == "deep_sets":
             hp_config = deep_sets_config(config=config)
+
+        elif model_name == "graph_net":
+            hp_config = graph_net_config(config=config)
+        
 
         try:
 
@@ -42,7 +49,14 @@ def run_search(model_name, dataset_name, search_dir: str, max_runs=200):
             update_leaderboard(top_runs=top_runs, version_dir=version_dir)
         
         except Exception as e:
-            print(f"[Run {i+1}/{max_runs}] Configuration failed: {e}")
+            print(f"[Run {i}/{max_runs}] Configuration failed: {e}")
+
+            with open(status_log, "a") as f:
+                f.write(f"Run {i} FAILED\n")
+                f.write(f"Error: {e}\n")
+                f.write("Hyperparameters:\n")
+                f.write(f"{hp_config}\n")
+                f.write("-" * 80 + "\n\n")
 
         # free memory 
         gc.collect()
@@ -88,6 +102,9 @@ def deep_sets_config(config):
 
     return hp_config
 
+def graph_net_config(config):
+    pass
+
 
 
 def update_leaderboard(top_runs, version_dir):
@@ -115,8 +132,6 @@ def update_leaderboard(top_runs, version_dir):
     })
 
     top_runs.sort(key=lambda x: x["val_acc"], reverse=True)
-    if len(top_runs) > 30:
-        del top_runs[30:]
 
 
 def save_leaderboard(top_runs, save_dir):

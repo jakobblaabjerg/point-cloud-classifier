@@ -207,7 +207,12 @@ class Step2PointTabular(DataModule):
         df = pd.DataFrame({
             "event_id": data["event_id"],
             "energy": data["energy"],
-            "subdetector": data["subdetector"]
+            "subdetector": data["subdetector"],
+            "pid": data["mcparticle_id"],
+            "time": data["time"],
+            "position_x": data["position"][:, 0],
+            "position_y": data["position"][:, 1],
+            "position_z": data["position"][:, 2],
         })
 
         # convert from bytes to strings
@@ -228,6 +233,16 @@ class Step2PointTabular(DataModule):
             print(f"Unknown detector part encountered. Count: {invalid_count}")
             # exclude invalid rows
             df = df[df["detector"] != "Other"]
+
+
+        df_event_features = df.groupby("event_id").agg(
+            n_particles=("pid", pd.Series.nunique),
+            elapsed_time=("time", lambda x: np.percentile(x, 99)),
+            energy_weighted_x=("position_x", lambda x: np.average(x, weights=df.loc[x.index, "energy"])),
+            energy_weighted_y=("position_y", lambda x: np.average(x, weights=df.loc[x.index, "energy"])),
+            energy_weighted_z=("position_z", lambda x: np.average(x, weights=df.loc[x.index, "energy"])),
+        ).reset_index()
+
 
         # split data into hcal and ecal 
         df_grouped = df.groupby(["event_id", "detector"]).agg(
@@ -261,7 +276,10 @@ class Step2PointTabular(DataModule):
         df_preprocessed["energy_hcal_frac"] = df_preprocessed["energy_hcal"] / df_preprocessed["energy_total"]
         df_preprocessed["label"] = particle
         df_preprocessed["label"] = df_preprocessed["label"].map({"proton": 0, "piM": 1})
-        df_preprocessed = df_preprocessed[["event_id", "energy_total", "hits_total", "energy_hcal_frac", "hits_hcal_frac", "label"]]
+
+        df_preprocessed = df_preprocessed.merge(df_event_features, on="event_id", how="left")
+
+        df_preprocessed = df_preprocessed[["event_id", "energy_total", "hits_total", "energy_hcal_frac", "hits_hcal_frac", "n_particles", "elapsed_time", "energy_weighted_x", "energy_weighted_y", "energy_weighted_z", "label"]]
 
         df_preprocessed = self._remap_event_ids(df_preprocessed)
 
@@ -464,7 +482,6 @@ class Step2PointPointCloud(DataModule):
             df = df[df["energy"] >= self.energy_cutoff]
         print("Length after:", len(df))
 
-
         # sum energy per event
         df_grouped = df.groupby("event_id")["energy"].sum().reset_index()
         df_grouped = df_grouped.rename(columns={"energy": "energy_total"})
@@ -474,12 +491,24 @@ class Step2PointPointCloud(DataModule):
 
         df["energy"] = df["energy"]/df["energy_total"]
 
-
         # compute min and max per event
         tmin = df.groupby("event_id")["time"].transform("min")
         tmax = df.groupby("event_id")["time"].transform("max")
         df["time"] = (df["time"] - tmin) / (tmax - tmin + 1e-8)
 
+        # standardize position
+        coords = ["position_x", "position_y", "position_z"]
+
+        for coord in coords:
+            event_mean = (df.groupby("event_id").apply(lambda g: np.average(g[coord], weights=g["energy"])).rename(f"{coord}_mean").reset_index())
+            df = df.merge(event_mean, on="event_id", how="left")
+
+            event_std = (df.groupby("event_id").apply(lambda g: np.sqrt(np.average((g[coord] - np.average(g[coord], weights=g["energy"]))**2, weights=g["energy"]))).rename(f"{coord}_std").reset_index())
+            df = df.merge(event_std, on="event_id", how="left")
+
+            df[coord] = (df[coord] - df[f"{coord}_mean"]) / (df[f"{coord}_std"] + 1e-8)
+
+        df = df.drop(columns=[f"{c}_mean" for c in coords] + [f"{c}_std" for c in coords])
 
         df = self._remap_event_ids(df)
         df["label"] = particle
@@ -494,6 +523,33 @@ class Step2PointPointCloud(DataModule):
 
 
 
+    def _scale_features(self):
+
+        feature_cols = ["energy"]
+        print("Scaling the following columns:", feature_cols)
+
+        # extract features
+        X_train = self.datasets["train"][feature_cols]
+        X_val   = self.datasets["val"][feature_cols]
+        X_test  = self.datasets["test"][feature_cols]
+
+        # fit scaler on train
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        self.scaler = scaler
+        save_dir = os.path.join(self.data_dir, self.name)
+        os.makedirs(save_dir, exist_ok=True)
+        joblib.dump(scaler, os.path.join(save_dir, f"{self.name}_scaler.pkl"))        
+
+        # transform val and test
+        X_val_scaled = scaler.transform(X_val)
+        X_test_scaled = scaler.transform(X_test)
+
+        # replace original feature columns with scaled values
+        for split, X_scaled in zip(["train", "val", "test"], [X_train_scaled, X_val_scaled, X_test_scaled]):
+            df_scaled = self.datasets[split].copy()
+            df_scaled[feature_cols] = X_scaled
+            self.datasets[split] = df_scaled
             
 
     def _save_datasets(self):
