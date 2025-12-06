@@ -989,6 +989,10 @@ class Step2PointGraph(DataModule):
         
             for f in files:
                 print(os.path.basename(f))
+
+                part = int(os.path.basename(f).split("_")[-1].replace("file", "").replace(".h5", ""))
+                print(f"Part: {part}")
+
                 data_raw = self._load_h5py_file(f)
                 num_events = len(np.unique(data_raw["event_id"]))
                 data_preprocessed  = self._preprocess_data(data_raw, particle) # list of dicts (graphs)
@@ -1001,8 +1005,11 @@ class Step2PointGraph(DataModule):
 
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
 
-                self.datasets["train"].extend(train_df)
-                self.datasets["val"].extend(val_df)
+                # create test set
+                if part == 1:
+                    self.datasets["train"].extend(train_df)
+                    self.datasets["val"].extend(val_df)
+        
                 self.datasets["test"].extend(test_df)
 
         # sanity check
