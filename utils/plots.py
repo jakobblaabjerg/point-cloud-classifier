@@ -36,10 +36,10 @@ def plot_data(dataset, sample_size=None, random_state=42, save_dir=None):
 
 def plot_confusion_matrix(y_true, y_pred, save_dir=None, split_name="test"):
 
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, normalize="true")
 
     plt.figure(figsize=(5, 4))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False)
+    sns.heatmap(cm, annot=True, fmt=".2f", cmap="Blues", cbar=False)
     plt.title(f"Confusion Matrix ({split_name})")
     plt.xlabel("Predicted label")
     plt.ylabel("True label")

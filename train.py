@@ -12,7 +12,7 @@ import os
 import pickle
 from sklearn.metrics import accuracy_score, classification_report
 import torch
-
+import json
 
 def get_dataloader(dataset_name, config):
 
@@ -47,10 +47,10 @@ def get_model(model_name, config, model_dir=None):
         model = ModelWrapper(model, **config["trainer"], **config["logging"])
 
         if model_dir is not None:
-            model_path = os.path.join(model_dir, "model.pt")
+            model_path = os.path.join(model_dir, "best_model.pt")
             if not os.path.exists(model_path):
                 raise FileNotFoundError(f"FullyConnectedNet model not found at {model_path}")
-            model.load()
+            model.load(model_path)
             print(f"Loaded FullyConnectedNet model from {model_path}")             
     
 
@@ -60,7 +60,7 @@ def get_model(model_name, config, model_dir=None):
         model = ModelWrapper(model, **config["trainer"], **config["logging"])
 
         if model_dir is not None:
-            model_path = os.path.join(model_dir, "model.pt")
+            model_path = os.path.join(model_dir, "best_model.pt")
             if not os.path.exists(model_path):
                 raise FileNotFoundError(f"DeepSets model not found at {model_path}")
             model.load()
@@ -101,6 +101,30 @@ def evaluate_model(model_dir, save_dir):
 
     acc_test = accuracy_score(y_true_test, y_pred_test)
     print("accuracy/test", round(acc_test, 6))
+
+    train_loader = dataloader.get_train_loader()
+    y_true_train, y_pred_train = model.predict(train_loader)
+
+    acc_train = accuracy_score(y_true_train, y_pred_train)
+    print("accuracy/train", round(acc_train, 6))
+
+    val_loader = dataloader.get_val_loader()
+    y_true_val, y_pred_val = model.predict(val_loader)
+
+    acc_val = accuracy_score(y_true_val, y_pred_val)
+    print("accuracy/val", round(acc_val, 6))
+
+
+    metrics = {
+        "accuracy_train": float(acc_train),
+        "accuracy_val": float(acc_val),
+        "accuracy_test": float(acc_test),
+    }
+
+    save_path = os.path.join(save_dir, "metrics.json")
+    with open(save_path, "w") as f:
+        json.dump(metrics, f, indent=4)
+
 
 
     classification_report(y_true_test, y_pred_test)
@@ -164,15 +188,15 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
 if __name__ == "__main__": 
 
     # model = "fully_connected_net"
-    # model = "logistic_regression"
-    model = "graph_net"
-    dataset = "s2pg" 
-    config = load_config("configs/base.yaml", f"configs/{model}.yaml")
-    train_model(model, dataset, config, plots=True)
+    # #model = "logistic_regression"
+    # #model = "graph_net"
+    # dataset = "s2pt" 
+    # config = load_config("configs/base.yaml", f"configs/{model}.yaml")
+    # train_model(model, dataset, config, plots=True)
 
 
-    # version = 86
-    # model_dir = f"log/version_{version}"
-    # save_dir = f"results/version_{version}"
-    # os.makedirs(save_dir, exist_ok=True)
-    # evaluate_model(model_dir=model_dir, save_dir=save_dir)
+    version = 99
+    model_dir = f"log/version_{version}"
+    save_dir = f"results/version_{version}"
+    os.makedirs(save_dir, exist_ok=True)
+    evaluate_model(model_dir=model_dir, save_dir=save_dir)
