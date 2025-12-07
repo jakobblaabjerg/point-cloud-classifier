@@ -63,7 +63,7 @@ def get_model(model_name, config, model_dir=None):
             model_path = os.path.join(model_dir, "best_model.pt")
             if not os.path.exists(model_path):
                 raise FileNotFoundError(f"DeepSets model not found at {model_path}")
-            model.load()
+            model.load(model_path)
             print(f"Loaded DeepSets model from {model_path}")    
 
 
@@ -73,10 +73,10 @@ def get_model(model_name, config, model_dir=None):
         model = ModelWrapper(model, **config["trainer"], **config["logging"])
 
         if model_dir is not None:
-            model_path = os.path.join(model_dir, "model.pt")
+            model_path = os.path.join(model_dir, "best_model.pt")
             if not os.path.exists(model_path):
                 raise FileNotFoundError(f"GraphNet model not found at {model_path}")
-            model.load()
+            model.load(model_path)
             print(f"Loaded GraphNet model from {model_path}")   
 
     else:
