@@ -307,6 +307,11 @@ class Step2PointTabular(DataModule):
                 hits_total   = data["hits_total"].to_numpy(),
                 energy_hcal_frac = data["energy_hcal_frac"].to_numpy(),
                 hits_hcal_frac   = data["hits_hcal_frac"].to_numpy(),
+                energy_weighted_x = data["energy_weighted_x"].to_numpy(),
+                energy_weighted_y = data["energy_weighted_y"].to_numpy(),
+                energy_weighted_z = data["energy_weighted_z"].to_numpy(),
+                n_particles = data["n_particles"].to_numpy(), 
+                elapsed_time = data["elapsed_time"].to_numpy(),
                 label       = data["label"].to_numpy(),
             )
         print("Finished saving data")
@@ -326,6 +331,11 @@ class Step2PointTabular(DataModule):
                 "hits_total": data["hits_total"],
                 "energy_hcal_frac": data["energy_hcal_frac"],
                 "hits_hcal_frac": data["hits_hcal_frac"],
+                "energy_weighted_x": data["energy_weighted_x"],
+                "energy_weighted_y": data["energy_weighted_y"],
+                "energy_weighted_z": data["energy_weighted_z"],
+                "n_particles": data["n_particles"],
+                "elapsed_time": data["elapsed_time"],
                 "label": data["label"]
             })
 
@@ -1241,7 +1251,7 @@ class Step2PointGraph(DataModule):
 
 if __name__ == "__main__":
     data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
-    Step2PointGraph(data_dir=data_dir, create_dataset=True)
+    Step2PointTabular(data_dir=data_dir, create_dataset=True, feature_scaling=False)
 
 
 
