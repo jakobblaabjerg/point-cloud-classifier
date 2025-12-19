@@ -8,15 +8,12 @@ def load_config(base_path, specific_path=None):
     if specific_path:
         with open(specific_path) as f:
             specific_config = yaml.safe_load(f)
-
         if specific_config and isinstance(specific_config, dict):
             config = merge_dicts(base_config, specific_config)
         else:
             config = base_config
-
     else:
         config = base_config
-
     return config
 
 

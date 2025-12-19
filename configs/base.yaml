@@ -4,6 +4,6 @@ meta:
 
 dataset:
   data_dir: "data/continuous"
-
+  #data_dir: "data/test"
 logging:
   log_dir: "log"

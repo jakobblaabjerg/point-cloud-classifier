@@ -85,8 +85,14 @@ class DataModule():
         
             for f in files:
                 print(os.path.basename(f))
+                
+                # load raw data
                 data_raw = self._load_h5py_file(f)
+                
+                # count events 
                 num_events = len(np.unique(data_raw["event_id"]))
+                
+                # preprocess data
                 data_preprocessed  = self._preprocess_data(data_raw, particle)
                 data_preprocessed["source_file"] = os.path.basename(f)
                 data_preprocessed["event_id"] = data_preprocessed["event_id"]+event_id_offset
@@ -106,7 +112,7 @@ class DataModule():
 
         assert event_id_offset == total_events
 
-
+        # feature scaling
         if self.feature_scaling:
             self._scale_features()
         
@@ -115,9 +121,6 @@ class DataModule():
         # remove source file column after data is saved
         for split in self.datasets:
             self.datasets[split] = self.datasets[split].drop(columns=["source_file"])
-
-
-
 
 
     def _scale_features(self):
@@ -159,7 +162,7 @@ class DataModule():
         return df
 
     def _split_dataset(self, dataset):
-        # should ideally be moved upstream
+
         train_frac, val_frac, test_frac = self.data_split
 
         event_ids = dataset["event_id"].unique()
@@ -279,7 +282,17 @@ class Step2PointTabular(DataModule):
 
         df_preprocessed = df_preprocessed.merge(df_event_features, on="event_id", how="left")
 
-        df_preprocessed = df_preprocessed[["event_id", "energy_total", "hits_total", "energy_hcal_frac", "hits_hcal_frac", "n_particles", "elapsed_time", "energy_weighted_x", "energy_weighted_y", "energy_weighted_z", "label"]]
+        df_preprocessed = df_preprocessed[["event_id", 
+                                           "energy_total", 
+                                           "hits_total", 
+                                           "energy_hcal_frac", 
+                                           "hits_hcal_frac", 
+                                           "n_particles", 
+                                           "elapsed_time", 
+                                           "energy_weighted_x", 
+                                           "energy_weighted_y", 
+                                           "energy_weighted_z", 
+                                           "label"]]
 
         df_preprocessed = self._remap_event_ids(df_preprocessed)
 
@@ -350,7 +363,6 @@ class Step2PointTabular(DataModule):
         y_tensor = torch.tensor(y.reshape(-1, 1), dtype=torch.float32)
         return DataLoader(TensorDataset(X_tensor, y_tensor), batch_size=self.batch_size, shuffle=(split=="train"))
 
-
     def get_train_loader(self):
         split ="train"
         self.datasets[split] = self.datasets[split].drop(columns=["event_id"])
@@ -409,10 +421,12 @@ class Step2PointPointCloud(DataModule):
 
         self.parts = parts
 
-        if sparse_batching:
-            self.collate_fn = self._collate_sparse
-        else:
-            self.collate_fn = self._collate_padded
+        self.collate_fn = self._collate_sparse
+
+        # if sparse_batching:
+        #     self.collate_fn = self._collate_sparse
+        # else:
+        #     self.collate_fn = self._collate_padded
 
         self.energy_cutoff = energy_cutoff
 
@@ -634,8 +648,6 @@ class Step2PointPointCloud(DataModule):
         print("Finished loading datasets")
 
 
-    # are labels and events matching?
-
     def _collate_sparse(self, batch):
         """
         features:       (sum(N_hits_i), F)
@@ -651,31 +663,31 @@ class Step2PointPointCloud(DataModule):
         return x, idx, labels
 
 
-    def _collate_padded(self, batch):
-        """
-        features:  (B, N_max, F)
-        mask:   (B, N_max)
-        labels: (B,1)
-        """
-        features, labels_list = zip(*batch)
-        B = len(batch)
-        lengths = [f.size(0) for f in features]
-        N_max = max(lengths)
+    # def _collate_padded(self, batch):
+    #     """
+    #     features:  (B, N_max, F)
+    #     mask:   (B, N_max)
+    #     labels: (B,1)
+    #     """
+    #     features, labels_list = zip(*batch)
+    #     B = len(batch)
+    #     lengths = [f.size(0) for f in features]
+    #     N_max = max(lengths)
 
-        F = features[0].size(1)
+    #     F = features[0].size(1)
 
-        x = torch.zeros((B, N_max, F))
-        mask  = torch.zeros((B, N_max))
+    #     x = torch.zeros((B, N_max, F))
+    #     mask  = torch.zeros((B, N_max))
 
-        for i, f in enumerate(features):
+    #     for i, f in enumerate(features):
             
-            n = f.size(0)
-            x[i, :n] = f
-            mask[i, :n] = 1.0
+    #         n = f.size(0)
+    #         x[i, :n] = f
+    #         mask[i, :n] = 1.0
 
-        labels = torch.stack(labels_list).float()
+    #     labels = torch.stack(labels_list).float()
 
-        return x, mask, labels
+    #     return x, mask, labels
 
 
 class Step2PointGraph(DataModule):
@@ -843,11 +855,13 @@ class Step2PointGraph(DataModule):
         edges_parent = [] 
 
         for child_pid in unique_pids:
-          
+
+      
             child_idxs = indices_map.get(child_pid)
             child_idxs_sorted = child_idxs[np.argsort(time_event[child_idxs])]
             n_steps = len(child_idxs)
 
+            # look for temporal connections   
             if n_steps > 1:
                 for i in range(n_steps-1):
                     parent_idx = child_idxs_sorted[i]
@@ -858,7 +872,7 @@ class Step2PointGraph(DataModule):
                     
                     edges_time.append((source, target))
 
-
+            # look for parent connections
             parent_pids = Step2PointGraph._get_ancestor_pids(
                 child_pid, 
                 unique_pids, 
@@ -881,6 +895,7 @@ class Step2PointGraph(DataModule):
 
             for parent_pid in parent_pids:
 
+                # connect only steps closest in time
                 candidate_idxs = indices_map.get(parent_pid)
                 candidate_times = time_event[candidate_idxs]
                 candidate_delta_times = abs(candidate_times-min_time)
@@ -917,7 +932,7 @@ class Step2PointGraph(DataModule):
     @staticmethod
     def _get_ancestor_pids(pid, unique_pids, parent_map, cache):
 
-        """Return pids of nearest ancestor caches results per particle id."""
+        """Return pids of nearest ancestor, caches results per particle id."""
 
         # if particle ancestor already exist in cache.
         if pid in cache:
@@ -1015,11 +1030,9 @@ class Step2PointGraph(DataModule):
 
                 train_df, val_df, test_df = self._split_dataset(data_preprocessed) # file level split 
 
-                # create test set
-                if part == 1:
-                    self.datasets["train"].extend(train_df)
-                    self.datasets["val"].extend(val_df)
-        
+
+                self.datasets["train"].extend(train_df)
+                self.datasets["val"].extend(val_df)      
                 self.datasets["test"].extend(test_df)
 
         # sanity check
@@ -1237,7 +1250,7 @@ class Step2PointGraph(DataModule):
 
         X_b = torch.cat(X_b, dim=0)
         y_b = torch.stack(y_b).unsqueeze(1)
-        edges_b = torch.cat(edges_b, dim=1) ## is dim 1 right?
+        edges_b = torch.cat(edges_b, dim=1) 
         membership_b = torch.cat(membership_b, dim=0)
 
         if self.use_weights:
@@ -1248,10 +1261,9 @@ class Step2PointGraph(DataModule):
         return X_b, membership_b, edges_b, weights_b, y_b
 
 
-
 if __name__ == "__main__":
     data_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Documents\phd\git\point-cloud-classifier\data\continuous"
-    Step2PointTabular(data_dir=data_dir, create_dataset=True, feature_scaling=False)
+    Step2PointPointCloud(data_dir=data_dir, create_dataset=True)
 
 
 

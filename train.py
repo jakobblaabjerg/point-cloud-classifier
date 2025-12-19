@@ -187,16 +187,16 @@ def train_model(model_name: str, dataset_name: str, config, plots=False, return_
 
 if __name__ == "__main__": 
 
-    # model = "fully_connected_net"
-    # #model = "logistic_regression"
-    # #model = "graph_net"
-    # dataset = "s2pt" 
-    # config = load_config("configs/base.yaml", f"configs/{model}.yaml")
-    # train_model(model, dataset, config, plots=True)
+    model = "fully_connected_net"
+    #model = "logistic_regression"
+    #model = "graph_net"
+    dataset = "s2pt" 
+    config = load_config("configs/base.yaml", f"configs/{model}.yaml")
+    train_model(model, dataset, config, plots=True)
 
 
-    version = 99
-    model_dir = f"log/version_{version}"
-    save_dir = f"results/version_{version}"
-    os.makedirs(save_dir, exist_ok=True)
-    evaluate_model(model_dir=model_dir, save_dir=save_dir)
+    # version = 99
+    # model_dir = r"C:\Users\jakobbm\OneDrive - NTNU\Desktop\version_13"
+    # save_dir = f"results/version_test"
+    # os.makedirs(save_dir, exist_ok=True)
+    # evaluate_model(model_dir=model_dir, save_dir=save_dir)

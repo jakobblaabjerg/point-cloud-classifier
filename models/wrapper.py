@@ -26,6 +26,7 @@ class ModelWrapper:
         self.checkpoint_path = os.path.join(self.log_dir, "best_model.pt") if log_dir else None
         self.model.to(self.device)
 
+        # optimizer 
         if optimizer == "adam":
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         elif optimizer == "adamw":
@@ -33,43 +34,41 @@ class ModelWrapper:
 
     def fit(self, train_loader, val_loader=None):
 
+        # loss function
         criterion = nn.BCEWithLogitsLoss() 
         
+        # TensorBoard log
         writer = SummaryWriter(self.log_dir)
 
+
+        # training loop
         for epoch in range(self.epochs):
+
             self.model.train()
             batch_losses = []
             loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", leave=False)
-            for batch in loop:
 
+            for batch in loop:
+                
                 *inputs, batch_y = batch 
                 inputs = [x.to(self.device) for x in inputs if x!=None]
                 batch_y = batch_y.to(self.device)
+
+                # forward pass
                 logits = self.model(*inputs)
 
-  
-                # print("logits:", logits[:5].detach().cpu().numpy().flatten())
-                # print("logits mean:", logits.mean().item(), "std:", logits.std().item())
-                # print("labels mean:", batch_y.mean().item())
-                # print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
-
-                # if len(batch) == 3:
-                #     # Sparse batching — check counts
-                #     print("aux shape:", batch_aux.shape)
-                #     print("aux unique:", torch.unique(batch_aux))
-
-
-                # print(torch.unique(batch_y))
-                # print(logits.shape, batch_y.shape)
-                # print(batch_y.mean())
-                # break
+                # clear old gradients
                 self.optimizer.zero_grad()
+
+                # compute loss
                 loss = criterion(logits, batch_y)
+                
+                # backward pass
                 loss.backward()
 
-
+                # update weights and biases
                 self.optimizer.step()
+
 
                 batch_losses.append(loss.item())
                 loop.set_postfix(loss=loss.item())
@@ -79,21 +78,20 @@ class ModelWrapper:
 
             writer.add_histogram("logits", logits.detach().cpu(), epoch)
 
-            # Log weights & grads once per epoch
+            # log weights and grads once per epoch
             for name, param in self.model.named_parameters():
                 writer.add_histogram(f"{name}_weight", param.detach().cpu(), epoch)
                 writer.add_histogram(f"{name}_grad", param.grad.detach().cpu(), epoch)
 
 
+            # for debugging
             # y_true_train, y_pred_train = self.predict(train_loader)
             # train_acc = (y_true_train == y_pred_train).mean()
             # writer.add_scalar("Accuracy/train", train_acc, epoch)
-
-            print("logits:", logits[:5].detach().cpu().numpy().flatten())
-            print("logits mean:", logits.mean().item(), "std:", logits.std().item())
+            # print("logits:", logits[:5].detach().cpu().numpy().flatten())
+            # print("logits mean:", logits.mean().item(), "std:", logits.std().item())
             # print("labels mean:", batch_y.mean().item())
             # print("X mean:", batch_X.mean().item(), "std:", batch_X.std().item())
-
 
 
             if val_loader:
@@ -101,7 +99,6 @@ class ModelWrapper:
                 self.model.eval()
                 val_losses = []
                 y_true_val, y_pred_val = [], []
-
 
                 with torch.no_grad():
                     for batch in val_loader:
@@ -127,6 +124,7 @@ class ModelWrapper:
                 writer.add_scalar("Loss/val", val_loss, epoch)
                 writer.add_scalar("Accuracy/val", val_acc, epoch)
 
+                # early stopping
                 if val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
                     self.early_stop_counter = 0

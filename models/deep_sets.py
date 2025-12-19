@@ -16,17 +16,20 @@ class DeepSets(nn.Module):
                  ):
         super().__init__()
 
-        # phi network (point encoder)
-        phi = []
-        last_dim = input_dim
 
+        # activation function 
         if activation == "relu":
             self.activation = nn.ReLU()
         elif activation == "gelu":
             self.activation = nn.GELU()
         elif activation == "silu":
             self.activation = nn.SiLU()
-        
+
+
+        # phi network (point encoder)
+        phi = []
+        last_dim = input_dim
+
 
         # for hidden in phi_layers:
         #     phi.append(nn.Linear(last_dim, hidden))
@@ -39,6 +42,7 @@ class DeepSets(nn.Module):
         #     last_dim = hidden
 
         for hidden in phi_layers:
+            # add residual block
             if residual_block and last_dim == hidden:
                 phi.append(ResidualBlock(hidden, self.activation, layer_norm=layer_norm))
             else:
@@ -109,35 +113,37 @@ class DeepSets(nn.Module):
 
         return logits
 
-    def _forward_padded(self, x: torch.Tensor, mask: torch.Tensor):
-        """
-        Padded forward pass.
-        x:    [B, N_max, input_dim]
-        mask: [B, N_max]  1 for valid points, 0 for padding
-        """
-        phi_x = self.phi(x)  # [B, N_max, H]
-        phi_x = phi_x * mask.unsqueeze(-1)  # zero out padded points
+    # def _forward_padded(self, x: torch.Tensor, mask: torch.Tensor):
+    #     """
+    #     Padded forward pass.
+    #     x:    [B, N_max, input_dim]
+    #     mask: [B, N_max]  1 for valid points, 0 for padding
+    #     """
+    #     phi_x = self.phi(x)  # [B, N_max, H]
+    #     phi_x = phi_x * mask.unsqueeze(-1)  # zero out padded points
 
-        if self.pooling == "sum":
-            pooled = phi_x.sum(dim=1)
-        elif self.pooling == "mean":
-            lengths = mask.sum(dim=1, keepdim=True).clamp(min=1.0)  # avoid division by 0
-            pooled = phi_x.sum(dim=1) / lengths
-        elif self.pooling == "max":
-            # mask padded points with a very negative value so they don't affect max
-            phi_x = phi_x.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
-            pooled = phi_x.max(dim=1)[0]
+    #     if self.pooling == "sum":
+    #         pooled = phi_x.sum(dim=1)
+    #     elif self.pooling == "mean":
+    #         lengths = mask.sum(dim=1, keepdim=True).clamp(min=1.0)  # avoid division by 0
+    #         pooled = phi_x.sum(dim=1) / lengths
+    #     elif self.pooling == "max":
+    #         # mask padded points with a very negative value so they don't affect max
+    #         phi_x = phi_x.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
+    #         pooled = phi_x.max(dim=1)[0]
 
-        logits = self.rho(pooled)  # [B, output_dim]
-        return logits
+    #     logits = self.rho(pooled)  # [B, output_dim]
+    #     return logits
 
   
     def forward(self, *args):
-        if self.sparse_batching:
-            return self._forward_sparse(*args)            
-        else:
-            return self._forward_padded(*args)
 
+        # if self.sparse_batching:
+        #     return self._forward_sparse(*args)            
+        # else:
+        #     return self._forward_padded(*args)
+
+        return self._forward_sparse(*args)
 
 
 class ResidualBlock(nn.Module):

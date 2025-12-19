@@ -1,8 +1,5 @@
 import torch 
 from torch import nn
-from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
-import os
 
 class FullyConnectedNet(nn.Module):
 
